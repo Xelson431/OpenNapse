@@ -1,0 +1,459 @@
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import App from './App'
+
+const now = '2026-05-09T00:00:00.000Z'
+const alphaProjectId = '11111111-1111-4111-8111-111111111111'
+const betaProjectId = '22222222-2222-4222-8222-222222222222'
+
+function projectRecord(id: string, title: string, updatedAt = now) {
+  return { id, workspaceId: 'local-personal-workspace', createdBy: 'test-user', title, description: '', sourceIdeaId: null, whyNow: 'Test why now', firstStep: 'Test first step', doneLooksLike: 'Test done', status: 'planning', color: '#78716C', createdAt: now, updatedAt, version: 1, clientId: 'test-client', deviceId: 'test-device', isDeleted: false }
+}
+
+function ideaRecord(id: string, title: string, projectId: string | null = null) {
+  return { id, workspaceId: 'local-personal-workspace', createdBy: 'test-user', title, body: '', status: 'raw', projectId, tags: [], color: '#78716C', energyLevel: null, mood: null, createdAt: now, updatedAt: now, lastTouchedAt: now, buriedAt: null, version: 1, clientId: 'test-client', deviceId: 'test-device', isDeleted: false }
+}
+
+function ideaDataTransfer() {
+  const data = new Map<string, string>()
+  const types: string[] = []
+  return {
+    effectAllowed: 'uninitialized',
+    dropEffect: 'none',
+    types,
+    setData(type: string, value: string) {
+      data.set(type, value)
+      if (!types.includes(type)) types.push(type)
+    },
+    getData(type: string) {
+      return data.get(type) ?? ''
+    },
+    clearData(type?: string) {
+      if (type) {
+        data.delete(type)
+        const index = types.indexOf(type)
+        if (index >= 0) types.splice(index, 1)
+        return
+      }
+      data.clear()
+      types.splice(0, types.length)
+    },
+  } as unknown as DataTransfer
+}
+
+describe('App shell', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it('hides internal roadmap content from the product UI', () => {
+    render(<App />)
+
+    expect(screen.queryByText('Implementation map')).not.toBeInTheDocument()
+    expect(screen.queryByText('Infrastructure readiness')).not.toBeInTheDocument()
+    expect(screen.queryByText('Local assistant')).not.toBeInTheDocument()
+  })
+
+  it('captures a local idea through the modal', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: /dump idea/i }))
+    await user.type(screen.getByLabelText(/what should not be lost/i), 'Build secure local-first sync')
+    await user.click(screen.getByRole('button', { name: /save locally/i }))
+
+    expect(await screen.findByText('Build secure local-first sync')).toBeInTheDocument()
+    expect(localStorage.getItem('OpenNapse:v0:ideas')).toContain('Build secure local-first sync')
+  })
+
+  it('saves dumped ideas to the selected project or General Knowledge', async () => {
+    const user = userEvent.setup()
+    localStorage.setItem('OpenNapse:v0:projects', JSON.stringify([
+      projectRecord(alphaProjectId, 'Alpha Project'),
+    ]))
+    render(<App />)
+
+    expect(screen.queryByRole('button', { name: /quick capture/i })).not.toBeInTheDocument()
+    await user.click(await screen.findByRole('treeitem', { name: /alpha project/i }))
+    await user.click(screen.getByRole('button', { name: /dump idea/i }))
+    expect(screen.getByText(/saving to alpha project/i)).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/what should not be lost/i), 'Project scoped idea')
+    await user.click(screen.getByRole('button', { name: /save locally/i }))
+
+    await user.click(screen.getByRole('treeitem', { name: /alpha project/i }))
+    await user.click(screen.getByRole('button', { name: /dump idea/i }))
+    expect(screen.getByText(/saving to general knowledge/i)).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/what should not be lost/i), 'General idea')
+    await user.click(screen.getByRole('button', { name: /save locally/i }))
+
+    const stored = JSON.parse(localStorage.getItem('OpenNapse:v0:ideas') ?? '[]') as Array<{ title: string; projectId: string | null }>
+    expect(stored.find((idea) => idea.title === 'Project scoped idea')).toMatchObject({ projectId: alphaProjectId })
+    expect(stored.find((idea) => idea.title === 'General idea')).toMatchObject({ projectId: null })
+  })
+
+  it('enhances a short idea title when Enhance with AI is checked', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: /dump idea/i }))
+    const enhanceCheckbox = screen.getByRole('checkbox', { name: /enhance with ai/i })
+    expect(enhanceCheckbox).toBeInTheDocument()
+    await user.click(enhanceCheckbox)
+
+    await user.type(screen.getByLabelText(/what should not be lost/i), 'build a todo app')
+    await user.click(screen.getByRole('button', { name: /save locally/i }))
+
+    expect(await screen.findByText(/build a todo app\. consider breaking this down into concrete next steps\./i)).toBeInTheDocument()
+  })
+
+  it('appends speech transcript to the capture input when mic is used', async () => {
+    const user = userEvent.setup()
+
+    interface MockResultEvent {
+      resultIndex: number
+      results: Array<Array<{ transcript: string }>>
+    }
+
+    let mockResultHandler: ((event: MockResultEvent) => void) | null = null
+    let mockEndHandler: (() => void) | null = null
+
+    class MockSpeechRecognition {
+      continuous = false
+      interimResults = false
+      lang = 'en-US'
+      onresult: ((event: MockResultEvent) => void) | null = null
+      onerror: (() => void) | null = null
+      onend: (() => void) | null = null
+      start() {
+        mockResultHandler = this.onresult
+        mockEndHandler = this.onend
+      }
+      stop() {
+        mockEndHandler?.()
+      }
+    }
+
+    Object.assign(window, { SpeechRecognition: MockSpeechRecognition })
+
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: /dump idea/i }))
+
+    const micButton = screen.getByRole('button', { name: /start voice input/i })
+    expect(micButton).toBeInTheDocument()
+
+    await user.click(micButton)
+    expect(screen.getByText('Listening…')).toBeInTheDocument()
+
+    act(() => {
+      mockResultHandler?.({
+        resultIndex: 0,
+        results: [[{ transcript: 'Voice captured idea' }]],
+      })
+    })
+
+    expect(screen.getByLabelText(/what should not be lost/i)).toHaveValue('Voice captured idea')
+
+    await user.click(screen.getByRole('button', { name: /stop listening/i }))
+    expect(screen.queryByText('Listening…')).not.toBeInTheDocument()
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (window as any).SpeechRecognition
+  })
+
+  it('promotes an idea into a project and first task', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: /dump idea/i }))
+    await user.type(screen.getByLabelText(/what should not be lost/i), 'Design a premium focus mode')
+    await user.click(screen.getByRole('button', { name: /save locally/i }))
+
+    await user.click(await screen.findByRole('button', { name: /promote/i }))
+    await user.type(screen.getByPlaceholderText(/why now/i), 'The base app shell is ready')
+    await user.type(screen.getByLabelText(/first concrete step/i), 'Sketch the collapsed sidebar state')
+    await user.type(screen.getByLabelText(/done looks like/i), 'A calm focused single-item view')
+    await user.click(screen.getByRole('button', { name: /create project/i }))
+
+    expect(await screen.findByText('Commitment records')).toBeInTheDocument()
+    expect(screen.getAllByText('Design a premium focus mode').length).toBeGreaterThanOrEqual(1)
+    expect(localStorage.getItem('OpenNapse:v0:projects')).toContain('Design a premium focus mode')
+    expect(localStorage.getItem('OpenNapse:v0:tasks')).toContain('Sketch the collapsed sidebar state')
+  })
+
+  it('shows operational notes, graph, focus, and stats views', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getAllByRole('button', { name: /^notes$/i })[0])
+    expect(screen.getByText('Local document')).toBeInTheDocument()
+
+    await user.click(screen.getAllByRole('button', { name: /^graph$/i })[0])
+    expect(screen.getByText('Entity map')).toBeInTheDocument()
+
+    await user.click(screen.getAllByRole('button', { name: /^focus$/i })[0])
+    expect(screen.getByText('Slot 1')).toBeInTheDocument()
+
+    await user.click(screen.getAllByRole('button', { name: /^stats$/i })[0])
+    expect(screen.getByText('Export / import JSON')).toBeInTheDocument()
+  })
+
+  it('records and saves a voice memo attached to a note', async () => {
+    const user = userEvent.setup()
+
+    class MockMediaRecorder {
+      state = 'inactive'
+      ondataavailable: ((event: { data: Blob }) => void) | null = null
+      onstop: (() => void) | null = null
+      start() { this.state = 'recording' }
+      stop() {
+        this.state = 'inactive'
+        this.ondataavailable?.({ data: new Blob(['test-audio'], { type: 'audio/webm' }) })
+        this.onstop?.()
+      }
+    }
+
+    class MockFileReader {
+      result: string | ArrayBuffer | null = null
+      onloadend: (() => void) | null = null
+      readAsDataURL() {
+        this.result = 'data:audio/webm;base64,dGVzdC1hdWRpbw=='
+        this.onloadend?.()
+      }
+    }
+
+    Object.assign(window, { MediaRecorder: MockMediaRecorder, FileReader: MockFileReader })
+    Object.assign(navigator, { mediaDevices: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] }) } })
+
+    render(<App />)
+    await user.click(screen.getAllByRole('button', { name: /^notes$/i })[0])
+
+    await user.click(screen.getByRole('button', { name: /record voice memo/i }))
+    expect(screen.getByText('Recording…')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /stop recording/i }))
+    await waitFor(() => expect(screen.queryByText('Recording…')).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /delete recording/i })).toBeInTheDocument()
+
+    await user.clear(screen.getByLabelText(/note title/i))
+    await user.type(screen.getByLabelText(/note title/i), 'Voice note')
+    await user.click(screen.getByRole('button', { name: /save note/i }))
+
+    await waitFor(() => {
+      const storedNotes = JSON.parse(localStorage.getItem('OpenNapse:v0:notes') ?? '[]') as Array<{ title: string; voiceRecordings: Array<{ dataUrl: string }> }>
+      const note = storedNotes.find((n) => n.title === 'Voice note')
+      expect(note).toBeTruthy()
+      expect(note?.voiceRecordings.length).toBe(1)
+      expect(note?.voiceRecordings[0].dataUrl).toBe('data:audio/webm;base64,dGVzdC1hdWRpbw==')
+    })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (window as any).MediaRecorder
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (window as any).FileReader
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (navigator as any).mediaDevices
+  })
+
+  it('lets the graph select a node for details', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: /dump idea/i }))
+    await user.type(screen.getByLabelText(/what should not be lost/i), 'Graph selection idea')
+    await user.click(screen.getByRole('button', { name: /save locally/i }))
+
+    await user.click(screen.getAllByRole('button', { name: /^graph$/i })[0])
+    expect(screen.getByRole('button', { name: /auto-organize/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /zoom in/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /focus map/i })).toBeInTheDocument()
+    const [node, listItem] = await screen.findAllByRole('button', { name: /graph selection idea/i })
+    await user.click(listItem)
+
+    expect(node).toHaveAttribute('aria-pressed', 'true')
+    expect(listItem).toHaveAttribute('aria-current', 'true')
+
+    await user.click(listItem)
+
+    expect(node).toHaveAttribute('aria-pressed', 'false')
+    expect(listItem).not.toHaveAttribute('aria-current')
+    expect(screen.getByRole('heading', { name: /select a node/i })).toBeInTheDocument()
+  })
+
+  it('keeps Kanban active when a project folder is selected', async () => {
+    const user = userEvent.setup()
+    localStorage.setItem('OpenNapse:v0:projects', JSON.stringify([
+      projectRecord(alphaProjectId, 'Alpha Project', '2026-05-09T00:00:00.000Z'),
+      projectRecord(betaProjectId, 'Beta Project', '2026-05-10T00:00:00.000Z'),
+    ]))
+    render(<App />)
+
+    await user.click(screen.getAllByRole('button', { name: /^kanban$/i })[0])
+    await user.click(await screen.findByRole('treeitem', { name: /alpha project/i }))
+
+    expect(screen.getByLabelText(/new task title/i)).toBeInTheDocument()
+    expect(screen.getByText('Alpha Project', { selector: '.kanban-project-name' })).toBeInTheDocument()
+  })
+
+  it('hides Suggestions and Mentor surfaces', () => {
+    render(<App />)
+
+    expect(screen.queryByRole('heading', { name: /suggestions/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('complementary', { name: /mentor assistant/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /show mentor/i })).not.toBeInTheDocument()
+  })
+
+  it('moves linked ideas to another sidebar project by drag and drop', async () => {
+    const user = userEvent.setup()
+    const ideaId = '33333333-3333-4333-8333-333333333333'
+    localStorage.setItem('OpenNapse:v0:projects', JSON.stringify([
+      projectRecord(alphaProjectId, 'Alpha Project', '2026-05-09T00:00:00.000Z'),
+      projectRecord(betaProjectId, 'Beta Project', '2026-05-10T00:00:00.000Z'),
+    ]))
+    localStorage.setItem('OpenNapse:v0:ideas', JSON.stringify([
+      ideaRecord(ideaId, 'Portable idea', alphaProjectId),
+    ]))
+    render(<App />)
+
+    await user.click(screen.getAllByRole('button', { name: /^dashboard$/i })[0])
+    await user.click(await screen.findByRole('treeitem', { name: /alpha project/i }))
+    const record = await screen.findByRole('button', { name: /idea record: portable idea/i })
+    const betaProject = screen.getByRole('treeitem', { name: /beta project/i })
+    const dataTransfer = ideaDataTransfer()
+
+    fireEvent.dragStart(record, { dataTransfer })
+    fireEvent.dragEnter(betaProject, { dataTransfer })
+    fireEvent.dragOver(betaProject, { dataTransfer })
+    fireEvent.drop(betaProject, { dataTransfer })
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('OpenNapse:v0:ideas') ?? '[]') as Array<{ id: string; projectId: string; version: number }>
+      expect(stored.find((idea) => idea.id === ideaId)).toMatchObject({ projectId: betaProjectId, version: 2 })
+    })
+  })
+
+  it('supports local search and manual task creation', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: /dump idea/i }))
+    await user.type(screen.getByLabelText(/what should not be lost/i), 'Searchable moonshot idea')
+    await user.click(screen.getByRole('button', { name: /save locally/i }))
+    await user.type(screen.getByPlaceholderText(/search ideas/i), 'moonshot')
+    expect(await screen.findByText('Searchable moonshot idea')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /promote/i }))
+    await user.type(screen.getByPlaceholderText(/why now/i), 'It is searchable')
+    await user.type(screen.getByLabelText(/first concrete step/i), 'Create task seed')
+    await user.type(screen.getByLabelText(/done looks like/i), 'Search and task creation work')
+    await user.click(screen.getByRole('button', { name: /create project/i }))
+    await user.click(screen.getAllByRole('button', { name: /^kanban$/i })[0])
+    await user.type(screen.getByLabelText(/new task title/i), 'Manual follow-up task')
+    await user.click(screen.getByRole('button', { name: /add task/i }))
+
+    expect(await screen.findByText('Manual follow-up task')).toBeInTheDocument()
+  })
+
+  it('persists dark mode from the nav toggle', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: /toggle theme/i }))
+
+    expect(document.documentElement.dataset.theme).toBe('dark')
+    expect(localStorage.getItem('OpenNapse:v0:theme')).toBe('dark')
+  })
+
+  it('filters ideas from sidebar tags', async () => {
+    localStorage.clear()
+    const now = new Date().toISOString()
+    localStorage.setItem('OpenNapse:v0:ideas', JSON.stringify([
+      { id: crypto.randomUUID(), workspaceId: 'local-personal-workspace', createdBy: 'test-user', title: 'AI workflow idea', body: '', status: 'raw', tags: ['ai'], color: '#78716C', energyLevel: null, mood: null, createdAt: now, updatedAt: now, lastTouchedAt: now, buriedAt: null, version: 1, clientId: 'test-client', deviceId: 'test-device', isDeleted: false },
+      { id: crypto.randomUUID(), workspaceId: 'local-personal-workspace', createdBy: 'test-user', title: 'Design polish idea', body: '', status: 'raw', tags: ['design'], color: '#78716C', energyLevel: null, mood: null, createdAt: now, updatedAt: now, lastTouchedAt: now, buriedAt: null, version: 1, clientId: 'test-client', deviceId: 'test-device', isDeleted: false },
+    ]))
+    const user = userEvent.setup()
+    render(<App />)
+
+    expect(await screen.findByText('AI workflow idea')).toBeInTheDocument()
+    expect(screen.getByText('Design polish idea')).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: /tags/i }))
+    await user.click(screen.getByRole('treeitem', { name: /ai/i }))
+
+    expect(screen.getByText('AI workflow idea')).toBeInTheDocument()
+    expect(screen.queryByText('Design polish idea')).not.toBeInTheDocument()
+  })
+
+  it('runs command palette actions from the keyboard', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.keyboard('{Control>}k{/Control}')
+    await user.type(screen.getByPlaceholderText(/search commands/i), 'kanban')
+    await user.keyboard('{Enter}')
+
+    expect(screen.getByText(/Promote an idea to create a board/i)).toBeInTheDocument()
+  })
+
+  it('keeps hosted AI gated in settings without persisting the session key', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: /settings/i }))
+    await user.selectOptions(screen.getByRole('combobox', { name: /^provider$/i }), 'ollama-cloud')
+    await user.type(screen.getByLabelText(/ollama cloud api key/i), 'session-only-test-key')
+    await user.click(screen.getByRole('button', { name: /test connection gate/i }))
+    await waitFor(() => {
+      expect(screen.getAllByText(/required/i).length).toBeGreaterThan(0)
+    })
+    expect(screen.getByText(/does not call ollama yet/i)).toBeInTheDocument()
+    expect(localStorage.getItem('OpenNapse:v0:ai-settings')).not.toContain('session-only-test-key')
+    expect(JSON.stringify({ ...localStorage })).not.toContain('session-only-test-key')
+    expect(JSON.stringify({ ...sessionStorage })).not.toContain('session-only-test-key')
+  })
+
+  it('renders the privacy-first workspace and rich settings surfaces', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    expect(screen.getByRole('combobox', { name: /select workspace/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /settings/i }))
+
+    expect(screen.getByRole('dialog', { name: /settings/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /^Profile$/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /Workspace switcher/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /Credits and usage/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /Privacy and security/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /Team settings/i })).toBeInTheDocument()
+    expect(screen.getAllByText(/Supabase not configured/i).length).toBeGreaterThan(0)
+    expect(screen.getByText(/Add VITE_SUPABASE_\* env vars/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/email for magic link/i)).toBeDisabled()
+    expect(screen.getByLabelText(/email for magic link/i)).toHaveValue('admin@opennapse.local')
+    expect(screen.getByRole('button', { name: /send magic link/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /sign out/i })).toBeDisabled()
+    expect(screen.getByText(/Dev admin email is prefilled/i)).toBeInTheDocument()
+    expect(screen.getByText(/Bootstrap waiting/i)).toBeInTheDocument()
+  })
+
+  it('moves Kanban cards with keyboard controls', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: /dump idea/i }))
+    await user.type(screen.getByLabelText(/what should not be lost/i), 'Keyboard accessible Kanban')
+    await user.click(screen.getByRole('button', { name: /save locally/i }))
+    await user.click(await screen.findByRole('button', { name: /promote/i }))
+    await user.type(screen.getByPlaceholderText(/why now/i), 'Keyboard task movement matters')
+    await user.type(screen.getByLabelText(/first concrete step/i), 'Move me with keyboard')
+    await user.type(screen.getByLabelText(/done looks like/i), 'Kanban cards move without dragging')
+    await user.click(screen.getByRole('button', { name: /create project/i }))
+    await user.click(screen.getAllByRole('button', { name: /^kanban$/i })[0])
+
+    const card = await screen.findByRole('button', { name: /Task: Move me with keyboard/i })
+    fireEvent.keyDown(card, { key: 'ArrowRight', altKey: true })
+
+    await waitFor(() => {
+      expect(localStorage.getItem('OpenNapse:v0:tasks')).toContain('"columnId":"todo"')
+    })
+  })
+})

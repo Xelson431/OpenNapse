@@ -1,0 +1,20 @@
+{
+  "name": "OpenNapse",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @opennapse/web dev",
+    "build": "pnpm --filter @opennapse/web build",
+    "typecheck": "pnpm --filter @opennapse/web typecheck",
+    "test": "pnpm --filter @opennapse/web test",
+    "test:run": "pnpm --filter @opennapse/web test:run",
+    "lint": "pnpm --filter @opennapse/web lint",
+    "electron:dev": "pnpm --filter @opennapse/web electron:dev",
+    "electron:build": "pnpm --filter @opennapse/web electron:build"
+  },
+  "packageManager": "pnpm@10.33.2",
+  "workspaces": [
+    "apps/*"
+  ]
+}
