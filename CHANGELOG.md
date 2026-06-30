@@ -42,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub issue templates (bug report, feature request)
 - GitHub pull request template
 - .editorconfig + .nvmrc
+- Real BYOK connection test: browser-direct fetch to provider chat endpoints with minimal payload, CORS error handling, and clear pass/fail badges
+- Live model listing from provider APIs (GET /v1/models) after successful connection test, with graceful fallback to curated list when CORS-blocked
+- Key visibility toggle (Show/Hide) on AI API key input field
+- Public documentation under docs/: getting-started, project-structure, views, data-layer, architecture, ai, supabase, testing, troubleshooting
+- Full architecture reference in docs/architecture.md with seams table, adapter diagram, three deployment shapes, and state-vs-staged capability table
+- .dockerignore for Docker self-host scaffold
 
 ### Changed
 - Domain models now require `workspaceId` + `createdBy` on all content records
@@ -54,18 +60,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - handleSidebarFilter implements toggle behavior (click same project = deselect)
 - Removed duplicate bun.lock (pnpm is the canonical package manager)
 - Updated dummy-data.json with workspaceId + createdBy fields
+- .gitignore extended for public repo hygiene: ignore opencode.json, .opencode/, .supraspace/, package-lock.json, yarn.lock
+- AGENTS.md updated with public repo safety rules (never `git add .`, reject stray lockfiles, stop+rotate if secrets tracked)
+- README repositioned from "local-first" to hybrid "runs anywhere" (browser/Docker/Supabase); workflow-focused features; honest cloud sync status
+- AI settings panel consolidated: key input, base URL, test button, model selector, and consent checkbox in one section; removed fake "test connection gate"
+- Supabase migration cleaned up: removed duplicated DDL statements, fixed truncated foreign key reference
+- accept-invite edge function email guard flipped: `if (user.email && ...)` → `if (!user.email || ...)`
 
 ### Fixed
 - Electron main entrypoint now compiles TypeScript to dist-electron/ (was shipping raw .ts)
 - Zod parse failures in BrowserLocalAdapter now log warnings instead of silently dropping records
 - Service worker manifest.webmanifest now includes favicon icon (was empty array)
 - Notes sidebar header and editor toolbar now share the same height
+- renderMarkdown XSS (C1): HTML escaping (`escapeHtml`) applied before markdown regex substitution — prevents stored XSS via note content
+- Notes duplication on second save (C3): upsertNote returns note id; NotesView captures it to update activeId instead of discarding
+- Voice recorder MediaRecorder leak (C4): streamRef captures MediaStream; useEffect cleanup stops tracks on NoteEditor unmount
+- Corrupted Supabase migration (C2): truncated FK reference repaired, duplicated DDL body removed
+- accept-invite edge function email bypass (H1): guard now rejects email-less auth users instead of silently passing them through
+- workspace_members missing UPDATE/DELETE RLS (H2): owners and admins can update/remove members; active members can leave their workspace
+- importData and Load Demo Data silent overwrite (M1): window.confirm() dialogs warn before replacing all data
 
 ### Security
 - Session API keys never persist to any storage (enforced by tests)
 - BYOK keys stored in Supabase Vault only (vault_secret_id reference in ai_provider_configs)
 - RLS policies enforce workspace membership on all content tables
 - Edge Functions use service-role key server-side only; never exposed to frontend
+- XSS vulnerability fixed in note preview renderer (dangerouslySetInnerHTML with unescaped markdown)
+- Auth bypass fixed in accept-invite edge function (email-less users could accept any invite)
 
 ## [0.1.0] - 2026-05-08
 
