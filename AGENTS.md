@@ -11,6 +11,14 @@ Project-local rules. Keep context compact.
 - Treat pasted keys as exposed; advise rotation.
 - Never kill all Node processes.
 
+## Public Repo Hygiene
+- Repo is PUBLIC (github.com/Xelson431/OpenNapse). Assume everything committed is world-readable forever.
+- Never `git add .` blindly. Stage explicit paths. Run `git add -n .` first if unsure.
+- These are gitignored and must stay untracked: `opencode.json`, `.opencode/`, `.supraspace/`, `package-lock.json`, `.env*` (except `.env.example`).
+- `opencode.json` holds local MCP tokens; if it ever appears in `git status` as tracked, stop and rotate the token.
+- This is a pnpm repo: only `pnpm-lock.yaml` is committed. Reject `package-lock.json` / `yarn.lock`.
+- Marketing copy must match shipped reality. Cloud cross-device SYNC is NOT enabled (`sync/use-sync.ts` returns `coming-soon`). Don't claim working sync.
+
 ## Product
 - Local-first idea-to-project workspace.
 - Views: Capture, Dashboard, Kanban, Notes, Graph, Focus, Stats.

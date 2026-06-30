@@ -23,31 +23,6 @@ create table if not exists public.workspaces (
 
 create table if not exists public.workspace_members (
   id uuid primary key default gen_random_uuid(),
-  workspace_id uuid not null references public.workspaces(i-- opennapse workspace foundation.
--- This migration is the first cloud/team scaffold and should be applied before
--- any content table sync or hosted AI usage logging is enabled.
-
-create extension if not exists pgcrypto;
-
-create table if not exists public.profiles (
-  id uuid primary key references auth.users(id) on delete cascade,
-  email text,
-  display_name text not null default 'Personal workspace',
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
-create table if not exists public.workspaces (
-  id uuid primary key default gen_random_uuid(),
-  type text not null check (type in ('personal', 'team')),
-  name text not null,
-  owner_user_id uuid not null references auth.users(id) on delete cascade,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
-create table if not exists public.workspace_members (
-  id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references public.workspaces(id) on delete cascade,
   user_id uuid not null references auth.users(id) on delete cascade,
   role text not null check (role in ('owner', 'admin', 'member', 'viewer')),
@@ -136,5 +111,39 @@ create policy "Users can create their own owner membership"
     )
   );
 
--- Team membership management needs invite tables and non-recursive helper
--- functions before update/delete policies are enabled.
+create policy "Owners and admins can update or remove workspace members"
+  on public.workspace_members for update
+  using (
+    exists (
+      select 1
+      from public.workspace_members member
+      where member.workspace_id = workspace_members.workspace_id
+        and member.user_id = auth.uid()
+        and member.status = 'active'
+        and member.role in ('owner', 'admin')
+    )
+  )
+  with check (
+    exists (
+      select 1
+      from public.workspace_members member
+      where member.workspace_id = workspace_members.workspace_id
+        and member.user_id = auth.uid()
+        and member.status = 'active'
+        and member.role in ('owner', 'admin')
+    )
+  );
+
+create policy "Members can remove their own workspace membership"
+  on public.workspace_members for delete
+  using (
+    user_id = auth.uid()
+    and
+    exists (
+      select 1
+      from public.workspace_members member
+      where member.workspace_id = workspace_members.workspace_id
+        and member.user_id = auth.uid()
+        and member.status = 'active'
+    )
+  );

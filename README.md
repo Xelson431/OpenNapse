@@ -5,8 +5,13 @@
 <h1 align="center">OpenNapse</h1>
 
 <p align="center">
-  <strong>Local-first idea-to-project workspace.</strong><br/>
-  Capture raw ideas, promote the ones that matter into projects, plan on a Kanban board, link notes, and track momentum — without shipping your data anywhere by default.
+  <strong>The workspace that turns scattered ideas into shipped projects.</strong><br/>
+  Capture raw ideas, promote the ones that matter into projects, plan them on a Kanban board, link your notes, and watch your idea-to-reality ratio climb.
+</p>
+
+<p align="center">
+  <em>Runs anywhere you do — in your browser, on your own server, or backed by Supabase.<br/>
+  Same app, same data model, you pick the backend.</em>
 </p>
 
 <p align="center">
@@ -21,26 +26,35 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" />
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome" />
-  <img src="https://img.shields.io/badge/local--first-yes-purple.svg" alt="Local First" />
-  <img src="https://img.shields.io/badge/self--hostable-yes-orange.svg" alt="Self Hostable" />
+  <img src="https://img.shields.io/badge/runs-browser%20%7C%20docker%20%7C%20supabase-purple.svg" alt="Runs anywhere" />
+  <img src="https://img.shields.io/badge/data-yours-orange.svg" alt="Your data" />
 </p>
 
 ---
 
-## Features
+## The workflow
 
-🧠 **Brain Dump** — zero-friction idea capture with Space key shortcut  
-📁 **Multi-Workspace** — personal + team workspaces, each with its own projects  
-📋 **Kanban Board** — native HTML5 drag-and-drop + keyboard movement  
-📝 **Linked Notes** — notes connected to ideas and projects with voice memos  
-🕸️ **Relationship Graph** — visual brain map with smooth bezier curves and nebula styling  
-🎯 **Focus Mode** — daily slots and distraction-free flow  
-📊 **Stats & Momentum** — idea-to-reality ratio, export/import JSON  
-🤖 **8 AI Providers** — OpenAI, Anthropic, OpenRouter, Mistral, DeepSeek, Groq, Ollama Cloud (BYOK = free)  
-🔒 **Privacy-First** — all data stays on your device unless you explicitly enable cloud  
-☁️ **Optional Cloud** — Supabase-powered auth, teams, invites, and workspace sync  
-🖥️ **Desktop App** — Electron build for Windows, macOS, and Linux  
-📱 **PWA** — installable, works offline with service worker  
+OpenNapse is built around one loop: **capture → promote → plan → ship**.
+
+1. 🧠 **Capture** every idea the moment it hits — one keystroke, zero friction. Bad ideas are cheap; losing good ones is expensive.
+2. ⬆️ **Promote** the ideas worth pursuing into real projects with a first task already waiting.
+3. 📋 **Plan** the work on a Kanban board you can drive entirely from the keyboard.
+4. 📝 **Connect** notes (text or voice) to the ideas and projects they belong to.
+5. 📊 **See momentum** — your idea-to-reality ratio tells you whether you're shipping or just collecting.
+
+## Why people use it
+
+🗄️ **Your data, your backend** — run it fully in the browser, self-host it with Docker, or back it with Supabase. The storage layer is a swappable adapter, so the same app fits a solo notebook or a team deployment.
+
+🔒 **Private by default** — no telemetry, no account required, no AI calls unless you turn them on. Out of the box, nothing leaves your machine.
+
+🤖 **Bring-your-own-key AI** — wire in OpenAI, Anthropic, Mistral, DeepSeek, Groq, OpenRouter, or Ollama. BYOK means no markup and no middleman, and your keys never get baked into the browser bundle.
+
+🕸️ **A map of your thinking** — every idea, project, note, and task is one connected graph you can actually see.
+
+🎯 **Focus mode** — daily slots and a distraction-free surface for the one thing that matters today.
+
+🖥️ **Desktop & installable** — native builds for Windows, macOS, and Linux, plus an installable PWA with an offline app shell.
 
 ## Quick Start
 
@@ -68,22 +82,33 @@ pnpm --filter @opennapse/web electron:dev
 pnpm --filter @opennapse/web electron:build
 ```
 
-## Self-Hosting
+## Deploy it your way
 
-OpenNapse works in two modes:
+OpenNapse runs on three backends from the same codebase. Pick the one that fits.
 
-### 1. Static Deploy (local-only, no backend)
+### 1. Browser-only (no backend)
 
-Deploy the built frontend to any static host. All data lives in the user's browser (IndexedDB).
+Build the frontend and host it anywhere static. Every idea, project, note, and task lives in the user's browser via IndexedDB. Nothing to operate, nothing to pay for.
 
 ```bash
 pnpm build
 # Upload apps/web/dist/ to Cloudflare Pages, Vercel, Netlify, or nginx
 ```
 
-### 2. Full Cloud (auth + teams + AI gateway)
+### 2. Docker (self-hosted)
 
-Add Supabase for authentication, team workspaces, and the AI credit system.
+Serve the app behind nginx with one command. Runs browser-only by default; pass Supabase build args to light up cloud features.
+
+```bash
+docker compose up --build
+# Open http://localhost:8080
+```
+
+See [`docker/`](./docker/) for the Dockerfile and nginx config.
+
+### 3. Supabase (auth + teams + AI gateway)
+
+Add Supabase for authentication, team workspaces, and the server-side AI gateway.
 
 ```bash
 # 1. Create a Supabase project at https://supabase.com
@@ -106,13 +131,7 @@ supabase functions deploy run-ai-action
 pnpm dev
 ```
 
-### Docker (coming soon)
-
-```bash
-docker compose up
-```
-
-See [`docker/`](./docker/) for the self-host scaffolding.
+> **Status:** auth, workspace schema, RLS policies, and the AI gateway are wired up. Cross-device cloud **sync** is staged behind the adapter and not enabled yet — the app shows its current sync state in Settings so you always know where your data lives.
 
 ## Architecture
 
@@ -122,7 +141,7 @@ apps/web/          React 19 + Vite + TypeScript frontend
     domain/        Zod-validated models (ideas, projects, tasks, notes, workspaces)
     stores/        Zustand state management
     db/            DBAdapter interface → BrowserLocalAdapter (IndexedDB) or SupabaseCloudAdapter
-    ai/            Provider registry (8 providers), action costs, consent gates
+    ai/            Provider registry (BYOK providers), action costs, consent gates
     auth/          Supabase auth hooks, teams service, credits, audit
     components/    Extracted UI components
     lib/           Shared utilities
@@ -139,11 +158,11 @@ docker/            Self-host scaffolding
 
 ### Key Design Decisions
 
-- **Local-first by default** — IndexedDB via `idb` wrapper; no backend required
-- **Adapter pattern** — `DBAdapter` interface lets the app swap between local and cloud storage
-- **Workspace-scoped** — every record has `workspaceId` + `createdBy`; RLS enforces boundaries
-- **BYOK AI** — bring your own API key, bypass all credit charges, keys stored in Supabase Vault (never in browser)
-- **No secrets in the bundle** — hosted provider keys are session-only in memory; never persisted to storage
+- **One adapter, three backends** — the `DBAdapter` interface is the heart of the app. `BrowserLocalAdapter` (IndexedDB) and `SupabaseCloudAdapter` implement the same contract, so the UI never knows or cares where data lives.
+- **Private by default** — no telemetry, no account, no AI calls until you opt in. Browser-only mode keeps everything on-device.
+- **Workspace-scoped** — every record carries `workspaceId` + `createdBy`; Supabase RLS enforces those boundaries server-side.
+- **BYOK AI** — bring your own API key to skip credit charges entirely; keys live in Supabase Vault, never the browser.
+- **No secrets in the bundle** — hosted provider keys are session-only in memory and never persisted to storage.
 
 ## Scripts
 

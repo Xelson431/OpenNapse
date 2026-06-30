@@ -394,18 +394,17 @@ describe('App shell', () => {
     expect(screen.getByText(/Promote an idea to create a board/i)).toBeInTheDocument()
   })
 
-  it('keeps hosted AI gated in settings without persisting the session key', async () => {
+  it('tests provider connection without persisting the session key', async () => {
     const user = userEvent.setup()
     render(<App />)
 
     await user.click(screen.getByRole('button', { name: /settings/i }))
     await user.selectOptions(screen.getByRole('combobox', { name: /^provider$/i }), 'ollama-cloud')
     await user.type(screen.getByLabelText(/ollama cloud api key/i), 'session-only-test-key')
-    await user.click(screen.getByRole('button', { name: /test connection gate/i }))
+    await user.click(screen.getByRole('button', { name: /test connection/i }))
     await waitFor(() => {
-      expect(screen.getAllByText(/required/i).length).toBeGreaterThan(0)
+      expect(document.querySelector('.settings-test-badge.err')).toBeInTheDocument()
     })
-    expect(screen.getByText(/does not call ollama yet/i)).toBeInTheDocument()
     expect(localStorage.getItem('OpenNapse:v0:ai-settings')).not.toContain('session-only-test-key')
     expect(JSON.stringify({ ...localStorage })).not.toContain('session-only-test-key')
     expect(JSON.stringify({ ...sessionStorage })).not.toContain('session-only-test-key')

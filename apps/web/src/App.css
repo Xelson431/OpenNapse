@@ -1068,6 +1068,13 @@
 .settings-list { margin: 0; padding-left: 18px; color: var(--fg); font-size: 13px; line-height: 1.6; }
 .request-preview { max-height: 260px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); color: var(--fg); padding: 12px; font-size: 12px; line-height: 1.5; }
 .settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.settings-key-row { display: flex; gap: 6px; align-items: stretch; }
+.settings-key-row input { flex: 1; }
+.settings-key-row .btn { white-space: nowrap; padding: 10px 12px; font-size: 12px; line-height: 1; }
+.settings-test-area { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.settings-test-badge { font-size: 12px; font-weight: 650; padding: 4px 10px; border-radius: var(--radius-sm); }
+.settings-test-badge.ok { color: var(--success, oklch(62% 0.15 155)); background: color-mix(in oklch, var(--success, oklch(62% 0.15 155)) 10%, transparent); }
+.settings-test-badge.err { color: var(--danger, oklch(58% 0.22 25)); background: color-mix(in oklch, var(--danger, oklch(58% 0.22 25)) 10%, transparent); }
 
 /* Transitions */
 .view-enter { animation: viewEnter 0.35s cubic-bezier(0.22, 1, 0.36, 1); }

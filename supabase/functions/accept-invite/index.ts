@@ -48,7 +48,7 @@ Deno.serve(async (request) => {
     return json(410, { error: 'Invite expired.' })
   }
 
-  if (user.email && invite.email.toLowerCase() !== user.email.toLowerCase()) {
+  if (!user.email || invite.email.toLowerCase() !== user.email.toLowerCase()) {
     return json(403, { error: 'Invite email does not match your account.' })
   }
 

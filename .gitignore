@@ -149,3 +149,12 @@ release/
 # Playwright
 test-results/
 playwright-report/
+
+# Local agent / tooling config (may contain tokens or private context)
+opencode.json
+.opencode/
+.supraspace/
+
+# This repo uses pnpm; reject stray npm/yarn lockfiles
+package-lock.json
+yarn.lock

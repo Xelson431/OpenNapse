@@ -2,6 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, ty
 import './App.css'
 import { DAILY_FREE_AI_CREDITS } from './ai/action-costs'
 import { AI_PROVIDERS, AI_SETTINGS_STORAGE_KEY, buildOllamaCloudPreview, buildProviderPreview, canRunHostedAI, loadAISettings, serializeAISettings, type AIRequestPreview, type AISettings } from './ai/provider'
+import { testProviderConnection, listProviderModels, type ListedModel } from './ai/test-connection'
 import dummyData from './assets/dummy-data.json'
 import { requestMagicLink, signOutOfSupabase, useAuthStatus, type AuthStatus } from './auth/use-auth-status'
 import { usePersonalWorkspaceBootstrap, type PersonalWorkspaceBootstrapStatus } from './auth/use-personal-workspace-bootstrap'
@@ -1019,7 +1020,7 @@ function DraggableTaskCard({ task, index, onMoveTask }: { task: Task; index: num
   )
 }
 
-function NotesView({ notes, projects, sidebarFilter, onSave }: { notes: Note[]; projects: Project[]; sidebarFilter: SidebarFilter; onSave: (input: { id?: string; title: string; content: string; linkedProjectId?: string | null; voiceRecordings?: VoiceRecording[] }) => Promise<void> }) {
+function NotesView({ notes, projects, sidebarFilter, onSave }: { notes: Note[]; projects: Project[]; sidebarFilter: SidebarFilter; onSave: (input: { id?: string; title: string; content: string; linkedProjectId?: string | null; voiceRecordings?: VoiceRecording[] }) => Promise<string | void> }) {
   const filteredNotes = useMemo(() => {
     if (sidebarFilter.kind === 'all') return notes.filter((n) => !n.linkedProjectId)
     if (sidebarFilter.kind === 'project') return notes.filter((n) => n.linkedProjectId === sidebarFilter.projectId)
@@ -1060,13 +1061,17 @@ function NotesView({ notes, projects, sidebarFilter, onSave }: { notes: Note[]; 
         </div>
       </div>
 
-      <NoteEditor key={activeId || 'new'} activeId={activeId} notes={notes} projects={projects} selectedProjectId={selectedProjectId} onSave={(input) => onSave(input).then(() => setUserActiveId(undefined))} />
+      <NoteEditor key={activeId || 'new'} activeId={activeId} notes={notes} projects={projects} selectedProjectId={selectedProjectId} onSave={(input) => onSave(input).then((id) => { if (id) setUserActiveId(id) })} />
     </div>
   )
 }
 
+function escapeHtml(text: string): string {
+  return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
+}
+
 function renderMarkdown(md: string): string {
-  return md
+  return escapeHtml(md)
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
@@ -1094,9 +1099,23 @@ function NoteEditor({ activeId, notes, projects, selectedProjectId, onSave }: { 
   const [recordings, setRecordings] = useState<VoiceRecording[]>(initialNote?.voiceRecordings ?? [])
   const [previewMode, setPreviewMode] = useState(false)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
   const chunksRef = useRef<Blob[]>([])
   const startTimeRef = useRef<number>(0)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        mediaRecorderRef.current.stop()
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop())
+        streamRef.current = null
+      }
+      mediaRecorderRef.current = null
+    }
+  }, [])
 
   const wrapSelection = useCallback((before: string, after: string = before) => {
     const el = textareaRef.current
@@ -1121,6 +1140,7 @@ function NoteEditor({ activeId, notes, projects, selectedProjectId, onSave }: { 
     if (!recordingSupported) return
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      streamRef.current = stream
       const mediaRecorder = new MediaRecorder(stream)
       mediaRecorderRef.current = mediaRecorder
       chunksRef.current = []
@@ -1145,6 +1165,7 @@ function NoteEditor({ activeId, notes, projects, selectedProjectId, onSave }: { 
         }
         reader.readAsDataURL(blob)
         stream.getTracks().forEach((track) => track.stop())
+        streamRef.current = null
       }
 
       startTimeRef.current = Date.now()
@@ -1752,8 +1773,8 @@ function StatsView({ ideas, projects, tasks, notes, exportData, importData, relo
         </div>
         <div className="backup-actions">
           <button className="btn btn-primary" type="button" onClick={() => void exportData().then(setBackup)}>Generate export</button>
-          <button className="btn btn-secondary" type="button" onClick={() => void importData(backup).then(reload)}>Import from text</button>
-          <button className="btn btn-secondary" type="button" onClick={() => void onLoadDemoData().then(() => { setDemoMessage('Demo data loaded.'); reload() }).catch((err: unknown) => setDemoMessage(`Failed: ${err instanceof Error ? err.message : String(err)}`))}>Load demo data</button>
+          <button className="btn btn-secondary" type="button" onClick={() => { if (window.confirm('Import all data? This replaces every idea, project, task, and note with the content in the textarea above. This cannot be undone.')) void importData(backup).then(reload) }}>Import from text</button>
+          <button className="btn btn-secondary" type="button" onClick={() => { if (window.confirm('Load demo data? This replaces all your existing ideas, projects, tasks, and notes with sample data. This cannot be undone.')) void onLoadDemoData().then(() => { setDemoMessage('Demo data loaded.'); reload() }).catch((err: unknown) => setDemoMessage(`Failed: ${err instanceof Error ? err.message : String(err)}`)) }}>Load demo data</button>
         </div>
         {demoMessage ? <p className="settings-status">{demoMessage}</p> : null}
         <textarea aria-label="Backup JSON" value={backup} onChange={(event) => setBackup(event.target.value)} placeholder="Generated backup JSON appears here. Paste backup JSON here to import." />
@@ -2386,6 +2407,11 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
   const [authEmail, setAuthEmail] = useState(DEV_ADMIN_EMAIL)
   const [authActionMessage, setAuthActionMessage] = useState('')
   const [clearDataMessage, setClearDataMessage] = useState('')
+  const [connectionResult, setConnectionResult] = useState<{ ok: boolean; message: string } | null>(null)
+  const [isTesting, setIsTesting] = useState(false)
+  const [liveModels, setLiveModels] = useState<ListedModel[] | null>(null)
+  const [modelsLoading, setModelsLoading] = useState(false)
+  const [keyVisible, setKeyVisible] = useState(false)
   const activeProviderId = aiSettings.activeProviderId
   const activeProviderDef = AI_PROVIDERS[activeProviderId]
   const isHostedActive = activeProviderDef.hosted
@@ -2415,19 +2441,15 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
       }) ?? buildOllamaCloudPreview('connection-test')
     )
   }, [activeProviderId, activeModelId, activeBaseUrlOverride])
-  const gate = canRunHostedAI({ settings: aiSettings, sessionApiKey: sessionKey, acceptedPreviewHash, preview })
-  const gateReason = 'reason' in gate ? gate.reason : ''
   const statusToShow = statusMessage
-  const liveGateMessage = isHostedActive
-    ? (gate.ok
-        ? 'Gate is satisfied. Test will only verify local readiness until backend support is enabled.'
-        : gateReason)
-    : 'Local rules need no gate. Switch to a hosted provider to configure it.'
   const canRequestMagicLink = supabaseEnv.configured && authStatus.mode !== 'loading' && authStatus.mode !== 'signed-in' && authEmail.trim().length > 0
   const canSignOut = supabaseEnv.configured && authStatus.mode === 'signed-in'
 
   function updateProvider(providerId: AISettings['activeProviderId']) {
     onAISettingsChange({ ...aiSettings, activeProviderId: providerId })
+    setConnectionResult(null)
+    setLiveModels(null)
+    setKeyVisible(false)
   }
 
   function updateHostedConsent(enabled: boolean) {
@@ -2481,6 +2503,42 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
       },
     })
   }
+
+  async function handleTestConnection() {
+    if (!sessionKey.trim()) return
+    setIsTesting(true)
+    setConnectionResult(null)
+    setLiveModels(null)
+    try {
+      const result = await testProviderConnection(sessionKey, activeProviderId, activeBaseUrlOverride)
+      setConnectionResult({ ok: result.ok, message: result.ok ? result.provider : result.error })
+      if (result.ok) {
+        fetchLiveModels()
+      }
+    } catch (err) {
+      setConnectionResult({ ok: false, message: err instanceof Error ? err.message : 'Unknown error' })
+    } finally {
+      setIsTesting(false)
+    }
+  }
+
+  async function fetchLiveModels() {
+    setModelsLoading(true)
+    const result = await listProviderModels(sessionKey, activeProviderId, activeBaseUrlOverride)
+    if (result.ok) {
+      setLiveModels(result.models)
+      const liveIds = new Set(result.models.map((m) => m.id))
+      if (activeModelId && !liveIds.has(activeModelId)) {
+        if (isGenericHostedActive) {
+          updateHostedModel(result.models[0]!.id)
+        }
+      }
+    }
+    setModelsLoading(false)
+  }
+
+  const modelOptions = liveModels ?? activeProviderDef.models
+  const showCuratedFallbackHint = !liveModels && connectionResult?.ok
 
   const consentAccepted = isOllamaActive
     ? aiSettings.ollamaCloud.hostedConsentAccepted
@@ -2590,53 +2648,85 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
                 ))}
               </select>
             </label>
-            {isGenericHostedActive ? (
-              <label className="settings-field">
-                <span>Model</span>
-                <select value={activeModelId} onChange={(event) => updateHostedModel(event.target.value)}>
-                  {activeProviderDef.models.map((model) => (
-                    <option key={model.id} value={model.id}>{model.label}</option>
-                  ))}
-                </select>
-              </label>
+            {!isHostedActive ? (
+              <p className="settings-muted">Local rules run on-device. No configuration needed.</p>
             ) : (
-              <label className="settings-field">
-                <span>Model</span>
-                <input type="text" readOnly value={activeModelId} />
-              </label>
+              <>
+                <label className="settings-field">
+                  <span>{sessionKeyLabel}</span>
+                  <div className="settings-key-row">
+                    <input
+                      type={keyVisible ? 'text' : 'password'}
+                      autoComplete="new-password"
+                      value={sessionKey}
+                      onChange={(event) => onSessionKeyChange(activeProviderId, event.target.value)}
+                      placeholder="Paste your API key"
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => setKeyVisible(!keyVisible)}
+                      aria-label={keyVisible ? 'Hide key' : 'Show key'}
+                    >
+                      {keyVisible ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                </label>
+                <p className="settings-muted">Key stays in memory for this session only. Clears on reload.</p>
+
+                {activeProviderDef.editableBaseUrl ? (
+                  <label className="settings-field">
+                    <span>Base URL (optional)</span>
+                    <input
+                      type="url"
+                      value={activeBaseUrlOverride ?? ''}
+                      onChange={(event) => updateHostedBaseUrl(event.target.value)}
+                      placeholder={activeProviderDef.endpoint?.defaultBaseUrl ?? ''}
+                      autoComplete="off"
+                    />
+                  </label>
+                ) : null}
+
+                <div className="settings-test-area">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={!sessionKey.trim() || isTesting}
+                    onClick={handleTestConnection}
+                  >
+                    {isTesting ? 'Testing\u2026' : 'Test connection'}
+                  </button>
+                  {connectionResult ? (
+                    <span className={`settings-test-badge ${connectionResult.ok ? 'ok' : 'err'}`}>
+                      {connectionResult.ok ? `\u2713 Connected to ${activeProviderDef.label}` : `\u2717 ${connectionResult.message}`}
+                    </span>
+                  ) : null}
+                  {modelsLoading ? <span className="settings-muted" style={{ marginLeft: 8 }}>Loading models\u2026</span> : null}
+                </div>
+
+                <label className="settings-field">
+                  <span>Model</span>
+                  <select
+                    value={activeModelId}
+                    onChange={(event) => { if (isGenericHostedActive) updateHostedModel(event.target.value) }}
+                    disabled={modelsLoading}
+                  >
+                    {modelOptions.map((model) => (
+                      <option key={model.id} value={model.id}>{model.label}</option>
+                    ))}
+                  </select>
+                </label>
+                {showCuratedFallbackHint ? (
+                  <p className="settings-muted">Live model listing unavailable. Showing curated models.</p>
+                ) : null}
+
+                <label className="settings-check">
+                  <input type="checkbox" checked={consentAccepted} onChange={(event) => updateHostedConsent(event.target.checked)} />
+                  <span>{consentHelp}</span>
+                </label>
+              </>
             )}
-            {activeProviderDef.editableBaseUrl ? (
-              <label className="settings-field">
-                <span>Base URL override</span>
-                <input
-                  type="url"
-                  value={activeBaseUrlOverride ?? ''}
-                  onChange={(event) => updateHostedBaseUrl(event.target.value)}
-                  placeholder={activeProviderDef.endpoint?.defaultBaseUrl ?? ''}
-                  autoComplete="off"
-                />
-              </label>
-            ) : null}
-            {isHostedActive ? (
-              <label className="settings-field">
-                <span>{sessionKeyLabel}</span>
-                <input
-                  type="password"
-                  autoComplete="new-password"
-                  value={sessionKey}
-                  onChange={(event) => onSessionKeyChange(activeProviderId, event.target.value)}
-                  placeholder="Not stored. Clears on reload."
-                />
-              </label>
-            ) : null}
-            {isHostedActive ? (
-              <label className="settings-check">
-                <input type="checkbox" checked={consentAccepted} onChange={(event) => updateHostedConsent(event.target.checked)} />
-                <span>{consentHelp}</span>
-              </label>
-            ) : null}
-            <p className="settings-status" aria-live="polite">{liveGateMessage}</p>
-            <p className="settings-muted">{isOllamaActive ? 'This screen does not call Ollama yet. It only checks whether consent, session key, and preview acceptance are ready for a future backend request.' : 'This screen does not call hosted providers yet. It only checks whether consent, session key, and preview acceptance are ready for a future backend request.'}</p>
+            <p className="settings-muted">{isOllamaActive ? 'Selecting a provider enables it for AI features. Consent + preview acceptance required before sending data.' : 'Selecting a provider enables it for AI features. Consent + preview acceptance required before sending data.'}</p>
           </section>
 
           <CreditsUsagePanel
@@ -2678,16 +2768,17 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
           />
 
           <section className="settings-panel settings-panel--wide" aria-labelledby="preview-settings-title">
-            <h4 id="preview-settings-title">Hosted request preview</h4>
-            <p className="settings-muted">Connection test sends generic text only. API keys are never persisted or shown in previews. Estimated cost: {preview.estimatedCreditCost} credits.</p>
+            <h4 id="preview-settings-title">Request preview</h4>
+            <p className="settings-muted">Before using AI features, review what would be sent. API keys are never persisted or included in previews. Estimated cost: {preview.estimatedCreditCost} credits.</p>
             <pre className="request-preview">{JSON.stringify(preview, null, 2)}</pre>
             <div className="settings-actions">
-              <button type="button" className="btn btn-secondary" onClick={() => {
+              <button type="button" className={`btn ${acceptedPreviewHash === preview.payloadHash ? 'btn-secondary' : 'btn-primary'}`} onClick={() => {
                 onAcceptPreview(preview.payloadHash)
                 const nextGate = canRunHostedAI({ settings: aiSettings, sessionApiKey: sessionKey, acceptedPreviewHash: preview.payloadHash, preview })
-                setStatusMessage(nextGate.ok ? 'Preview accepted. You can now test the connection gate.' : ('reason' in nextGate ? nextGate.reason : ''))
-              }}>Accept preview</button>
-              <button type="button" className="btn btn-primary" onClick={() => setStatusMessage(gate.ok ? 'Gate passed. No network request was made; backend support is still disabled.' : gateReason)}>Test connection gate</button>
+                setStatusMessage(nextGate.ok ? 'Preview accepted. You can now use AI features with this provider.' : ('reason' in nextGate ? nextGate.reason : ''))
+              }}>
+                {acceptedPreviewHash === preview.payloadHash ? '\u2713 Preview accepted' : 'Accept preview'}
+              </button>
             </div>
             {statusToShow ? <p className="settings-status">{statusToShow}</p> : null}
             {settingsSavedAt ? <p className="settings-muted">Saved {new Date(settingsSavedAt).toLocaleTimeString()}</p> : null}

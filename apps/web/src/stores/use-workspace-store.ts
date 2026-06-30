@@ -15,7 +15,7 @@ interface WorkspaceState {
   promoteIdea: (input: PromoteIdeaInput) => Promise<void>
   createTask: (input: CreateTaskInput) => Promise<void>
   moveTask: (id: string, columnId: TaskColumn) => Promise<void>
-  upsertNote: (input: UpsertNoteInput) => Promise<void>
+  upsertNote: (input: UpsertNoteInput) => Promise<string>
   exportData: () => Promise<string>
   importData: (payload: string) => Promise<void>
   clearAllData: () => Promise<void>
@@ -51,6 +51,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const notes = get().notes
     const exists = notes.some((item) => item.id === note.id)
     set({ notes: exists ? notes.map((item) => (item.id === note.id ? note : item)) : [note, ...notes] })
+    return note.id
   },
   exportData: async () => db.exportData(),
   importData: async (payload) => {
