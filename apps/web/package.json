@@ -13,7 +13,7 @@
     "test:run": "vitest run",
     "test:e2e": "playwright test",
     "preview": "vite preview",
-    "electron:compile": "tsc -p tsconfig.electron.json",
+    "electron:compile": "tsc -p tsconfig.electron.json && tsc -p tsconfig.electron-preload.json",
     "electron:dev": "pnpm electron:compile && electron ./dist-electron/main.js",
     "electron:build": "pnpm build && pnpm electron:compile && electron-builder"
   },
@@ -55,7 +55,7 @@
     "@types/node": "^24.12.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "electron": "^36.0.0",
+    "electron": "^43.0.0",
     "electron-builder": "^26.0.0",
     "eslint": "^10.2.1",
     "eslint-plugin-react-hooks": "^7.1.1",

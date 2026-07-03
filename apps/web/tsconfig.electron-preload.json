@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.electron.tsbuildinfo",
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.electron-preload.tsbuildinfo",
     "target": "es2023",
     "lib": ["ES2023"],
     "module": "node16",
@@ -18,6 +18,5 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["electron/**/*"],
-  "exclude": ["electron/preload.ts", "electron/preload.cts"]
+  "include": ["electron/preload.cts"]
 }
