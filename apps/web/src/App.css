@@ -819,6 +819,12 @@
 .kanban-project-selector:hover { background: var(--hover); }
 .kanban-project-name { font-size: 20px; font-weight: 600; font-family: var(--font-display); letter-spacing: -0.01em; }
 .kanban-a11y-hint { width: 100%; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.4; }
+.kanban-today { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: -8px 0 16px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: color-mix(in oklch, var(--accent-soft) 40%, var(--surface)); }
+.kanban-today-label { display: block; margin-bottom: 2px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.kanban-today strong { font-size: 14px; color: var(--fg); }
+.kanban-today-list { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; min-width: 0; }
+.kanban-today-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--fg); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kanban-today-chip em { color: oklch(58% 0.18 35); font-size: 10px; font-style: normal; text-transform: uppercase; letter-spacing: 0.04em; }
 .kanban-columns {
   display: flex; gap: 16px; flex: 1; overflow-x: auto; overflow-y: hidden; padding-bottom: 16px;
 }
@@ -850,6 +856,9 @@
   border-color: var(--accent);
 }
 .kanban-card-title { font-size: 14px; font-weight: 600; color: var(--fg); margin-bottom: 12px; line-height: 1.4; }
+.kanban-card-dates { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0 10px; }
+.kanban-card-dates span { font-size: 11px; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 2px 7px; }
+.kanban-card-dates span.overdue { color: oklch(58% 0.18 35); background: oklch(96% 0.04 35); border-color: oklch(85% 0.08 35); }
 .kanban-card-meta { display: flex; justify-content: space-between; align-items: center; }
 .kanban-priority { font-size: 11px; font-weight: 700; text-transform: uppercase; padding: 2px 7px; border-radius: 5px; }
 .kanban-priority.high { color: oklch(65% 0.2 40); background: oklch(95% 0.05 40); }
@@ -864,6 +873,7 @@
   padding: 12px;
   border-top: 1px solid var(--border);
   background: var(--surface);
+  flex-wrap: wrap;
 }
 .quick-task-form input {
   flex: 1;
@@ -876,6 +886,8 @@
   outline: none;
 }
 .quick-task-form input:focus { border-color: var(--accent); }
+.quick-task-date { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.quick-task-form .quick-task-date input { flex: 0 0 136px; color-scheme: light; }
 
 /* Notes Layout */
 .notes-layout {
@@ -1143,6 +1155,8 @@
     box-shadow: var(--shadow-xl);
     z-index: 150;
   }
+  .focus-sprint-panel { grid-template-columns: 1fr; margin: 0 20px 20px; }
+  .focus-grid, .stats-grid { padding: 0 20px; }
   .graph-panel { padding: 0 20px 20px; }
   .graph-node { width: 136px; }
   .graph-hub { width: min(190px, calc(100% - 24px)); }
@@ -1153,6 +1167,23 @@
 }
 
 /* Other preserved classes */
+.focus-sprint-panel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 380px); gap: 16px; margin: 0 40px 24px; padding: 18px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); }
+.focus-sprint-copy { display: flex; flex-direction: column; gap: 12px; }
+.focus-sprint-copy h3 { margin: 0; font-size: 20px; font-family: var(--font-display); letter-spacing: -0.01em; color: var(--fg); }
+.focus-sprint-copy p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; max-width: 640px; }
+.focus-sprint-modes { display: flex; gap: 8px; flex-wrap: wrap; }
+.focus-sprint-modes button { border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 999px; padding: 7px 11px; font-size: 12px; cursor: pointer; }
+.focus-sprint-modes button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.focus-timer-card { position: relative; display: flex; flex-direction: column; gap: 10px; padding: 18px; border-radius: var(--radius-md); background: radial-gradient(circle at 50% 0%, color-mix(in oklch, var(--accent-soft) 60%, transparent), transparent 65%), var(--bg); border: 1px solid var(--border); overflow: hidden; }
+.focus-timer-card::before { content: ''; position: absolute; inset: 0 auto 0 0; width: var(--focus-progress); background: linear-gradient(90deg, color-mix(in oklch, var(--accent) 12%, transparent), transparent); pointer-events: none; transition: width 220ms linear; }
+.focus-timer-card > * { position: relative; z-index: 1; }
+.focus-timer-mode { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.focus-timer-time { font-family: var(--font-display); font-size: clamp(42px, 7vw, 72px); line-height: 0.95; letter-spacing: -0.05em; color: var(--fg); }
+.focus-timer-card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.4; }
+.focus-timer-progress { height: 8px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); overflow: hidden; }
+.focus-timer-progress span { display: block; height: 100%; width: var(--focus-progress); background: var(--accent); border-radius: inherit; transition: width 220ms linear; }
+.focus-timer-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.focus-timer-card small { color: var(--muted); font-size: 12px; }
 .focus-grid, .stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 16px; margin-bottom: 24px; padding: 0 40px;}
 .focus-slot, .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 16px; display: flex; flex-direction: column; gap: 8px;}
 .focus-slot span, .stat-card span { font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--muted); letter-spacing: 0.05em; }

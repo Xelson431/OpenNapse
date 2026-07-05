@@ -147,6 +147,8 @@ create table if not exists public.tasks (
   column_id text not null default 'backlog' check (column_id in ('backlog', 'todo', 'in_progress', 'review', 'done')),
   sort_order double precision not null default 0,
   priority text not null default 'medium' check (priority in ('low', 'medium', 'high', 'urgent')),
+  scheduled_date date,
+  due_date date,
   completion_pct integer not null default 0 check (completion_pct between 0 and 100),
   completed_at timestamptz,
   version integer not null default 1 check (version > 0),
@@ -159,6 +161,8 @@ create table if not exists public.tasks (
 create index if not exists tasks_workspace_idx on public.tasks(workspace_id);
 create index if not exists tasks_workspace_project_idx on public.tasks(workspace_id, project_id);
 create index if not exists tasks_workspace_updated_idx on public.tasks(workspace_id, updated_at desc);
+create index if not exists tasks_workspace_scheduled_idx on public.tasks(workspace_id, scheduled_date) where scheduled_date is not null;
+create index if not exists tasks_workspace_due_idx on public.tasks(workspace_id, due_date) where due_date is not null;
 alter table public.tasks enable row level security;
 
 create policy "workspace members read tasks"

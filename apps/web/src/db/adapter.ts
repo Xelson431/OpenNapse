@@ -1,7 +1,7 @@
 import type { CreateIdeaInput, Idea } from '../domain/ideas'
 import type { Note, UpsertNoteInput } from '../domain/notes'
 import type { CreateProjectInput, PromoteIdeaInput, Project } from '../domain/projects'
-import type { CreateTaskInput, Task, TaskColumn } from '../domain/tasks'
+import type { CreateTaskInput, Task, TaskColumn, UpdateTaskInput } from '../domain/tasks'
 import type { CreateWorkspaceInput, WorkspaceRecord } from '../domain/workspaces'
 
 export interface SyncOutboxEntry {
@@ -33,8 +33,10 @@ export interface DBAdapter {
   createTask(input: CreateTaskInput): Promise<Task>
   promoteIdea(input: PromoteIdeaInput): Promise<{ idea: Idea; project: Project; task: Task }>
   moveTask(id: string, columnId: TaskColumn): Promise<Task>
+  updateTask(id: string, input: UpdateTaskInput): Promise<Task>
   upsertNote(input: UpsertNoteInput): Promise<Note>
   exportData(): Promise<string>
   importData(payload: string): Promise<void>
+  clearAllData(): Promise<void>
   listOutbox(): Promise<SyncOutboxEntry[]>
 }

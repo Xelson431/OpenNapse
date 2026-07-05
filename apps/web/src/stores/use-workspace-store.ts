@@ -1,9 +1,10 @@
 import { create } from 'zustand'
-import { db } from '../db/browser-local-adapter'
+import { getDb } from '../db/get-db'
+import { assertWriteAllowed } from '../lib/rate-limiter'
 import type { Idea } from '../domain/ideas'
 import type { Note, UpsertNoteInput } from '../domain/notes'
 import type { CreateProjectInput, Project, PromoteIdeaInput } from '../domain/projects'
-import type { CreateTaskInput, Task, TaskColumn } from '../domain/tasks'
+import type { CreateTaskInput, Task, TaskColumn, UpdateTaskInput } from '../domain/tasks'
 
 interface WorkspaceState {
   projects: Project[]
@@ -15,6 +16,7 @@ interface WorkspaceState {
   promoteIdea: (input: PromoteIdeaInput) => Promise<void>
   createTask: (input: CreateTaskInput) => Promise<void>
   moveTask: (id: string, columnId: TaskColumn) => Promise<void>
+  updateTask: (id: string, input: UpdateTaskInput) => Promise<void>
   upsertNote: (input: UpsertNoteInput) => Promise<string>
   exportData: () => Promise<string>
   importData: (payload: string) => Promise<void>
@@ -27,39 +29,51 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   notes: [],
   isLoaded: false,
   loadWorkspace: async () => {
-    const [projects, tasks, notes] = await Promise.all([db.listProjects(), db.listTasks(), db.listNotes()])
+    const [projects, tasks, notes] = await Promise.all([getDb().listProjects(), getDb().listTasks(), getDb().listNotes()])
     set({ projects, tasks, notes, isLoaded: true })
   },
   createProject: async (input) => {
-    const project = await db.createProject(input)
+    assertWriteAllowed('createProject')
+    const project = await getDb().createProject(input)
     set({ projects: [project, ...get().projects] })
   },
   promoteIdea: async (input) => {
-    const { project, task } = await db.promoteIdea(input)
+    assertWriteAllowed('promoteIdea')
+    const { project, task } = await getDb().promoteIdea(input)
     set({ projects: [project, ...get().projects], tasks: [task, ...get().tasks] })
   },
   createTask: async (input) => {
-    const task = await db.createTask(input)
+    assertWriteAllowed('createTask')
+    const task = await getDb().createTask(input)
     set({ tasks: [task, ...get().tasks] })
   },
   moveTask: async (id, columnId) => {
-    const updated = await db.moveTask(id, columnId)
+    assertWriteAllowed('moveTask')
+    const updated = await getDb().moveTask(id, columnId)
+    set({ tasks: get().tasks.map((task) => (task.id === id ? updated : task)) })
+  },
+  updateTask: async (id, input) => {
+    assertWriteAllowed('updateTask')
+    const updated = await getDb().updateTask(id, input)
     set({ tasks: get().tasks.map((task) => (task.id === id ? updated : task)) })
   },
   upsertNote: async (input) => {
-    const note = await db.upsertNote(input)
+    assertWriteAllowed('upsertNote')
+    const note = await getDb().upsertNote(input)
     const notes = get().notes
     const exists = notes.some((item) => item.id === note.id)
     set({ notes: exists ? notes.map((item) => (item.id === note.id ? note : item)) : [note, ...notes] })
     return note.id
   },
-  exportData: async () => db.exportData(),
+  exportData: async () => getDb().exportData(),
   importData: async (payload) => {
-    await db.importData(payload)
+    assertWriteAllowed('importData')
+    await getDb().importData(payload)
     await get().loadWorkspace()
   },
   clearAllData: async () => {
-    await db.clearAllData()
+    assertWriteAllowed('clearAllData')
+    await getDb().clearAllData()
     set({ projects: [], tasks: [], notes: [], isLoaded: true })
   },
 }))

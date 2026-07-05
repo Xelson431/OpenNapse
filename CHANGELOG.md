@@ -48,6 +48,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Public documentation under docs/: getting-started, project-structure, views, data-layer, architecture, ai, supabase, testing, troubleshooting
 - Full architecture reference in docs/architecture.md with seams table, adapter diagram, three deployment shapes, and state-vs-staged capability table
 - .dockerignore for Docker self-host scaffold
+- Kanban lightweight scheduling (optional `scheduledDate`/`dueDate` on tasks, today/overdue strip, date pills on task cards)
+- Focus Sprint: Pomodoro-style timer linked to a Kanban task or idea (work/deep/break presets, start/pause/reset, completion tracking)
+- Edge case and security challenge test suite (41 tests across 10 categories: XSS resistance, domain boundaries, unicode, prototype pollution, workspace isolation, AI key rejection, rate limiting audit, malformed input)
+- Additive migration `20260704000000_task_calendar_fields.sql` for task date columns + filtered indexes
+- Runtime DB adapter registry for switching between local IndexedDB and Supabase cloud storage after sign-in/bootstrap
+- Env-gated Supabase RLS integration test suite (`SUPABASE_TEST_*`) covering cross-user isolation, viewer write blocking, and removed-member access loss
+- Hosted write rate-limit migration (`rate_limit_events` + triggers) for server-side protection on direct Supabase table writes
+- Generic hosted billing/entitlement schema plus private billing-wrapper contract documentation
+- Billing wrapper client/UI gated by `VITE_BILLING_URL` (no Stripe SDK or secrets in the public app)
+- First sign-in local-to-cloud migration prompt when cloud workspace is empty and local data exists
 
 ### Changed
 - Domain models now require `workspaceId` + `createdBy` on all content records
@@ -66,8 +76,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AI settings panel consolidated: key input, base URL, test button, model selector, and consent checkbox in one section; removed fake "test connection gate"
 - Supabase migration cleaned up: removed duplicated DDL statements, fixed truncated foreign key reference
 - accept-invite edge function email guard flipped: `if (user.email && ...)` → `if (!user.email || ...)`
+- Docker nginx CSP from report-only to enforced + Report-Only mirror; restricted `script-src 'self'` and `connect-src` to known AI providers instead of wildcard `https:`
+- Content-Security-Policy-Report-Only replaced with dual enforced CSP + Report-Only in nginx
+- Team workspaces disabled locally (`ENABLE_TEAM_WORKSPACES = false`); hidden from switcher, team creation blocked, Team Settings explains hosted-only future scope
+- Supabase content migration updated: tasks table now includes `scheduled_date` and `due_date` columns with filtered indexes
+- `taskSchema` domain model extended with nullable `scheduledDate` and `dueDate` date-only fields
+- `CreateTaskInput` interface extended with optional `scheduledDate` and `dueDate`
+- `SupabaseCloudAdapter.updateTask()` now increments task versions like the local adapter
+- Zustand stores now resolve the active DB adapter at call time instead of importing the local adapter directly
+- Client-side write operations now pass through an in-memory rate limiter for accidental-spam protection
+- Voice recording dataUrl capped at 10MB in Zod schema (was unbounded)
+- FocusView now accepts ideas list and includes Focus Sprint panel; supersedes generic "daily focus slots" surface
+- Kanban quick-add form includes optional Plan/Due date inputs
+- SupabaseCloudAdapter row mapper updated for new task date columns
+- Mentor test fixtures updated with `scheduledDate: null, dueDate: null`
 
 ### Fixed
+- Electron main entrypoint now compiles TypeScript to dist-electron/ (was shipping raw .ts)
+- Electron preload script re-extension to .cts and new tsconfig.electron-preload.json for proper TypeScript compilation
+- Zod parse failures in BrowserLocalAdapter now log warnings instead of silently dropping records
+- Service worker manifest.webmanifest now includes favicon icon (was empty array)
+- Notes sidebar header and editor toolbar now share the same height
+- renderMarkdown XSS (C1): HTML escaping (`escapeHtml`) applied before markdown regex substitution — prevents stored XSS via note content
+- Notes duplication on second save (C3): upsertNote returns note id; NotesView captures it to update activeId instead of discarding
+- Voice recorder MediaRecorder leak (C4): streamRef captures MediaStream; useEffect cleanup stops tracks on NoteEditor unmount
+- Corrupted Supabase migration (C2): truncated FK reference repaired, duplicated DDL body removed
+- accept-invite edge function email bypass (H1): guard now rejects email-less auth users instead of silently passing them through
+- workspace_members missing UPDATE/DELETE RLS (H2): owners and admins can update/remove members; active members can leave their workspace
+- importData and Load Demo Data silent overwrite (M1): window.confirm() dialogs warn before replacing all data
+- Markdown link scheme bypass (B1): `sanitizeMarkdownHref()` blocks `javascript:`, `data:`, `vbscript:`, `file:`, and control/whitespace-obfuscated URLs — rewrites to `#`
+- CSP was report-only and too broad (B2): now enforced with `script-src 'self'` and scoped `connect-src` to known AI providers, plus Report-Only mirror for monitoring
+- Voice recording async setState after unmount (B3): `mountedRef` guard + oversized dataUrl discard before React state
+- Hosted AI workspace/config binding (B4): `run-ai-action` rejects workspace-scoped provider configs where `workspaceId` doesn't match the requested workspace
 - Electron main entrypoint now compiles TypeScript to dist-electron/ (was shipping raw .ts)
 - Zod parse failures in BrowserLocalAdapter now log warnings instead of silently dropping records
 - Service worker manifest.webmanifest now includes favicon icon (was empty array)
@@ -87,6 +127,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Edge Functions use service-role key server-side only; never exposed to frontend
 - XSS vulnerability fixed in note preview renderer (dangerouslySetInnerHTML with unescaped markdown)
 - Auth bypass fixed in accept-invite edge function (email-less users could accept any invite)
+- CSP enforced in Docker nginx: `script-src 'self'`, scoped `connect-src` to self + Supabase + known AI providers; CSP-Report-Only mirror collects violations at /csp-report
+- Markdown link URL scheme sanitization: `javascript:`, `data:`, `vbscript:`, `file:` URLs rewritten to `#` in rendered note links
+- Voice recording dataUrl capped at 10MB to prevent IndexedDB quota exhaustion
+- IndexedDB write failures now caught and logged (was unhandled throw)
+- Hosted AI workspace binding enforced: `run-ai-action` rejects mismatched workspace-scoped provider configs
+- 41 edge case / security challenge tests added (93 total): XSS resistance, prototype pollution, workspace isolation, AI key rejection, malformed input, rate limiting audit
 
 ## [0.1.0] - 2026-05-08
 

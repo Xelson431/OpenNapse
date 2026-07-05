@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import { db } from '../db/browser-local-adapter'
+import { getDb } from '../db/get-db'
+import { assertWriteAllowed } from '../lib/rate-limiter'
 import { LOCAL_PERSONAL_WORKSPACE_ID, type CreateWorkspaceInput, type WorkspaceRecord } from '../domain/workspaces'
 
 const ACTIVE_WORKSPACE_KEY = 'OpenNapse:v0:active-workspace-id'
@@ -38,36 +39,39 @@ export const useWorkspacesStore = create<WorkspacesState>((set, get) => ({
   activeWorkspaceId: readActiveWorkspaceId(),
   isLoaded: false,
   loadWorkspaces: async () => {
-    const workspaces = await db.listWorkspaces()
+    const workspaces = await getDb().listWorkspaces()
     const stored = get().activeWorkspaceId
     const exists = workspaces.some((w) => w.id === stored)
     const active = exists ? stored : workspaces[0]?.id ?? LOCAL_PERSONAL_WORKSPACE_ID
     if (active !== stored) {
       writeActiveWorkspaceId(active)
     }
-    db.setActiveWorkspaceId(active)
+    getDb().setActiveWorkspaceId(active)
     set({ workspaces, activeWorkspaceId: active, isLoaded: true })
   },
   setActiveWorkspace: (workspaceId) => {
     writeActiveWorkspaceId(workspaceId)
-    db.setActiveWorkspaceId(workspaceId)
+    getDb().setActiveWorkspaceId(workspaceId)
     set({ activeWorkspaceId: workspaceId })
   },
   createWorkspace: async (input) => {
-    const record = await db.createWorkspace(input)
+    assertWriteAllowed('workspaceMutation')
+    const record = await getDb().createWorkspace(input)
     set({ workspaces: [...get().workspaces, record] })
     return record
   },
   renameWorkspace: async (workspaceId, name) => {
-    const updated = await db.renameWorkspace(workspaceId, name)
+    assertWriteAllowed('workspaceMutation')
+    const updated = await getDb().renameWorkspace(workspaceId, name)
     set({ workspaces: get().workspaces.map((w) => (w.id === workspaceId ? updated : w)) })
   },
   deleteWorkspace: async (workspaceId) => {
-    await db.deleteWorkspace(workspaceId)
+    assertWriteAllowed('workspaceMutation')
+    await getDb().deleteWorkspace(workspaceId)
     const remaining = get().workspaces.filter((w) => w.id !== workspaceId)
     const nextActive = remaining[0]?.id ?? LOCAL_PERSONAL_WORKSPACE_ID
     writeActiveWorkspaceId(nextActive)
-    db.setActiveWorkspaceId(nextActive)
+    getDb().setActiveWorkspaceId(nextActive)
     set({ workspaces: remaining, activeWorkspaceId: nextActive })
   },
 }))

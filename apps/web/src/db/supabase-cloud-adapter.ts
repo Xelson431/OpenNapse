@@ -17,6 +17,7 @@ import {
   type CreateTaskInput,
   type Task,
   type TaskColumn,
+  type UpdateTaskInput,
 } from '../domain/tasks'
 import {
   workspaceRecordSchema,
@@ -179,6 +180,8 @@ function rowToTask(row: UnknownRow): Task {
     columnId: pickString(row, 'column_id', 'backlog'),
     sortOrder: pickNumber(row, 'sort_order', 0),
     priority: pickString(row, 'priority', 'medium'),
+    scheduledDate: pickNullable(row, 'scheduled_date', (v) => (typeof v === 'string' ? v : null)),
+    dueDate: pickNullable(row, 'due_date', (v) => (typeof v === 'string' ? v : null)),
     completionPct: pickNumber(row, 'completion_pct', 0),
     createdAt: pickString(row, 'created_at'),
     updatedAt: pickString(row, 'updated_at'),
@@ -202,6 +205,8 @@ function taskToRow(task: Task): Record<string, unknown> {
     column_id: task.columnId,
     sort_order: task.sortOrder,
     priority: task.priority,
+    scheduled_date: task.scheduledDate,
+    due_date: task.dueDate,
     completion_pct: task.completionPct,
     created_at: task.createdAt,
     updated_at: task.updatedAt,
@@ -506,6 +511,7 @@ export class SupabaseCloudAdapter implements DBAdapter {
       .from('tasks')
       .update({
         column_id: columnId,
+        sort_order: Date.now(),
         completed_at: completed ? new Date().toISOString() : null,
         completion_pct: completed ? 100 : existing.completion_pct,
         version: nextVersion,
@@ -516,6 +522,33 @@ export class SupabaseCloudAdapter implements DBAdapter {
       .select('*')
       .single()
     if (error || !data) throw new Error(`moveTask: ${error?.message ?? 'no row'}`)
+    return rowToTask(data as UnknownRow)
+  }
+
+  async updateTask(id: string, input: UpdateTaskInput): Promise<Task> {
+    const client = this.requireClient('updateTask')
+    await this.requireUserId(client, 'updateTask')
+    const { data: existing, error: readError } = await client
+      .from('tasks')
+      .select('version')
+      .eq('id', id)
+      .eq('workspace_id', this.requireWorkspace())
+      .single()
+    if (readError || !existing) throw new Error(`updateTask: ${readError?.message ?? 'not found'}`)
+    const patch: Record<string, unknown> = {
+      version: ((existing.version as number | null) ?? 1) + 1,
+      updated_at: new Date().toISOString(),
+    }
+    if (input.scheduledDate !== undefined) patch.scheduled_date = input.scheduledDate
+    if (input.dueDate !== undefined) patch.due_date = input.dueDate
+    const { data, error } = await client
+      .from('tasks')
+      .update(patch)
+      .eq('id', id)
+      .eq('workspace_id', this.requireWorkspace())
+      .select('*')
+      .single()
+    if (error || !data) throw new Error(`updateTask: ${error?.message ?? 'no row'}`)
     return rowToTask(data as UnknownRow)
   }
 
@@ -584,10 +617,22 @@ export class SupabaseCloudAdapter implements DBAdapter {
     }
   }
 
+  async clearAllData(): Promise<void> {
+    const client = this.requireClient('clearAllData')
+    const workspaceId = this.requireWorkspace()
+    await Promise.all([
+      client.from('ideas').delete().eq('workspace_id', workspaceId),
+      client.from('projects').delete().eq('workspace_id', workspaceId),
+      client.from('tasks').delete().eq('workspace_id', workspaceId),
+      client.from('notes').delete().eq('workspace_id', workspaceId),
+    ])
+  }
+
   async listOutbox(): Promise<SyncOutboxEntry[]> {
     // Cloud adapter has no local outbox; writes go straight to Supabase.
     return []
   }
+
 }
 
 export function createSupabaseCloudAdapter(): DBAdapter {

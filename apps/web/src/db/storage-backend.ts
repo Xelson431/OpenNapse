@@ -151,7 +151,12 @@ export class IndexedDBBackend implements StorageBackend {
   async write<T>(key: string, value: T): Promise<void> {
     await this.ready()
     const db = await this.getDb()
-    await db.put(STORE, value, key)
+    try {
+      await db.put(STORE, value, key)
+    } catch (error) {
+      console.warn(`[OpenNapse] IndexedDB write failed for "${key}"`, error)
+      throw error
+    }
   }
 
   async remove(key: string): Promise<void> {

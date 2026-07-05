@@ -16,6 +16,8 @@ export const taskSchema = z.object({
   columnId: taskColumnSchema.default('backlog'),
   sortOrder: z.number().default(0),
   priority: taskPrioritySchema.default('medium'),
+  scheduledDate: z.string().date().nullable().default(null),
+  dueDate: z.string().date().nullable().default(null),
   completionPct: z.number().int().min(0).max(100).default(0),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
@@ -34,6 +36,13 @@ export interface CreateTaskInput {
   title: string
   description?: string
   priority?: z.infer<typeof taskPrioritySchema>
+  scheduledDate?: string | null
+  dueDate?: string | null
+}
+
+export interface UpdateTaskInput {
+  scheduledDate?: string | null
+  dueDate?: string | null
 }
 
 export const taskColumns: Array<{ id: TaskColumn; label: string }> = [
@@ -56,6 +65,8 @@ export function createFirstStepTask(project: Project): Task {
     ideaId: project.sourceIdeaId,
     columnId: 'backlog',
     sortOrder: Date.now(),
+    scheduledDate: null,
+    dueDate: null,
     createdAt: now,
     updatedAt: now,
     clientId: project.clientId,
@@ -75,6 +86,8 @@ export function createTaskDraft(input: CreateTaskInput, context: DraftContext): 
     columnId: 'backlog',
     sortOrder: Date.now(),
     priority: input.priority ?? 'medium',
+    scheduledDate: input.scheduledDate ?? null,
+    dueDate: input.dueDate ?? null,
     createdAt: now,
     updatedAt: now,
     clientId: context.deviceId,
