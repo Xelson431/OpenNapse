@@ -2,7 +2,7 @@
 
 OpenNapse runs fully without a backend. Supabase is the **optional** cloud path that adds authentication, team workspaces, and a server-side AI gateway. This doc maps what exists and what's wired vs. staged.
 
-> **Status:** Auth, the workspace/content schema, RLS policies, and the AI gateway are real and wired. Cross-device cloud **sync** is staged behind the `DBAdapter` seam and **not enabled** — the `SupabaseCloudAdapter` is fully written but never selected at runtime. See [Data Layer](./data-layer.md#supabasecloudadapter-written-gated).
+> **Status:** Auth, personal workspace bootstrap, RLS policies, runtime cloud-adapter selection, and the AI gateway scaffold are real and wired. Cross-device conflict-resolving **sync** is still staged; signed-in hosted sessions use `SupabaseCloudAdapter` directly, while signed-out/local sessions use IndexedDB.
 
 ## Enabling Supabase locally
 
@@ -40,7 +40,7 @@ pnpm dev
 
 ## Database schema (`supabase/migrations/`)
 
-Three migrations, applied in order:
+Migrations, applied in order:
 
 ### 1. Workspace foundation
 `20260509000000_workspace_foundation.sql`
@@ -57,6 +57,25 @@ Three migrations, applied in order:
 - Two helper functions gate access: `is_workspace_member()` (read) and `can_edit_workspace()` (write).
 - RLS: member-read / editor-write on all content.
 - An `updated_at` trigger keeps timestamps fresh.
+- Task table includes nullable `scheduled_date` and `due_date` (date-only, no time) for lightweight day-planning. Indexed with filtered indexes (`is not null`) on `(workspace_id, scheduled_date)` and `(workspace_id, due_date)`.
+
+### 3. Task calendar fields (additive)
+`20260704000000_task_calendar_fields.sql`
+
+- Adds `scheduled_date date` and `due_date date` columns to `tasks` (if not present from the content migration).
+- Creates filtered indexes for workspace-scoped queries.
+
+### 4. Hosted rate limits
+`20260706000000_hosted_rate_limits.sql`
+
+- `rate_limit_events` records authenticated direct-table writes.
+- `projects`, `ideas`, `tasks`, and `notes` have trigger-level write throttles so frontend-only guards are not the security boundary.
+
+### 5. Generic billing entitlements
+`20260706001000_billing_entitlements.sql`
+
+- `billing_plans` and `workspace_subscriptions` model plan state without any Stripe SDK/secrets in the public repo.
+- Private hosted billing wrapper writes subscriptions with service role after Stripe webhook verification.
 
 ### 3. Ops tables
 `20260512000100_ops_tables.sql`
@@ -75,7 +94,7 @@ Secret-bearing and privileged actions run server-side, never in the browser. All
 
 | Function | Purpose |
 |----------|---------|
-| `run-ai-action` | The **sole hosted-AI gateway**. Auth + workspace check, credit enforcement, resolves the provider key from Vault, makes the call, logs usage. |
+| `run-ai-action` | The **sole hosted-AI gateway**. Auth + workspace check, credit enforcement, resolves the provider key from Vault, makes the call, logs usage. Rejects workspace-scoped provider configs where `workspaceId` doesn't match the requesting workspace. |
 | `test-provider-connection` | BYOK reachability check. Reads the Vault key for one call; **never returns it**. |
 | `invite-member` | Owner/admin creates a `workspace_invite` + token. |
 | `accept-invite` | Redeems an invite token into a membership. |
@@ -96,11 +115,12 @@ Secret-bearing and privileged actions run server-side, never in the browser. All
 | `audit.ts` | `listAuditLog()` — read-only. |
 
 **Real today:** magic-link sign-in, session detection, personal-workspace bootstrap.
-**Gated / preview:** team invites and team workspace mode (`workspaceModes` marks team as disabled in `domain/workspaces.ts`); credits/audit reads depend on the tables + service-role writes existing.
+**Gated / preview:** team invites and team workspace mode (`ENABLE_TEAM_WORKSPACES = false` in `App.tsx`, team workspaces hidden from switcher, team creation blocked); credits/audit reads depend on the tables + service-role writes existing.
 
 ## What's NOT enabled
 
-- **Cross-device sync.** `sync/use-sync.ts` returns `coming-soon` when configured; `syncNow` is a no-op. The `SupabaseCloudAdapter` implements the full `DBAdapter` contract but is never wired into the stores — there's no runtime adapter switch. This is the headline piece of remaining work.
+- **Conflict-resolving outbox sync.** Signed-in sessions use the cloud adapter directly. The local outbox still exists, but there is no merge/conflict engine that drains local offline edits after a cloud session reconnects.
+- **Stripe implementation.** The public repo includes only generic billing tables and inert UI/client wiring. Stripe checkout, portal, and webhook code belongs in a private billing wrapper; see [Hosted Billing Wrapper](./hosted-billing-wrapper.md).
 
 ## Wiring sync (future work)
 

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import { db } from '../db/browser-local-adapter'
+import { getDb } from '../db/get-db'
+import { assertWriteAllowed } from '../lib/rate-limiter'
 import type { Idea } from '../domain/ideas'
 
 interface IdeasState {
@@ -17,27 +18,32 @@ export const useIdeasStore = create<IdeasState>((set, get) => ({
   ideas: [],
   isLoaded: false,
   loadIdeas: async () => {
-    const ideas = await db.listIdeas()
+    const ideas = await getDb().listIdeas()
     set({ ideas, isLoaded: true })
   },
   createIdea: async (input) => {
-    const idea = await db.createIdea({ title: input.title, projectId: input.projectId ?? null })
+    assertWriteAllowed('createIdea')
+    const idea = await getDb().createIdea({ title: input.title, projectId: input.projectId ?? null })
     set({ ideas: [idea, ...get().ideas] })
   },
   buryIdea: async (id) => {
-    const updated = await db.buryIdea(id)
+    assertWriteAllowed('buryIdea')
+    const updated = await getDb().buryIdea(id)
     set({ ideas: get().ideas.map((idea) => (idea.id === id ? updated : idea)) })
   },
   resurrectIdea: async (id) => {
-    const updated = await db.resurrectIdea(id)
+    assertWriteAllowed('resurrectIdea')
+    const updated = await getDb().resurrectIdea(id)
     set({ ideas: get().ideas.map((idea) => (idea.id === id ? updated : idea)) })
   },
   moveIdeaToProject: async (id, projectId) => {
-    const updated = await db.moveIdeaToProject(id, projectId)
+    assertWriteAllowed('moveIdeaToProject')
+    const updated = await getDb().moveIdeaToProject(id, projectId)
     set({ ideas: get().ideas.map((idea) => (idea.id === id ? updated : idea)) })
   },
   clearAllData: async () => {
-    await db.clearAllData()
+    assertWriteAllowed('clearAllData')
+    await getDb().clearAllData()
     set({ ideas: [], isLoaded: true })
   },
 }))

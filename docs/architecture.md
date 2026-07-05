@@ -50,11 +50,13 @@ This is why "runs anywhere" is true without forking the code. See [Data Layer](.
 | Local CRUD (ideas/projects/tasks/notes) | ✅ Live |
 | IndexedDB persistence + Zod validation | ✅ Live |
 | Voice notes (MediaRecorder) | ✅ Live |
+| Kanban scheduling (scheduledDate/dueDate + today/overdue strip) | ✅ Live |
+| Focus Sprint (Pomodoro-style timer, linked to task/idea) | ✅ Live |
 | Local AI suggestions + Mentor (no LLM) | ✅ Live |
 | BYOK hosted AI (consent + session key) | ✅ Live, opt-in |
 | Supabase auth + personal workspace bootstrap | ✅ Live (when configured) |
 | Supabase schema + RLS + Edge Functions | ✅ Live (when deployed) |
-| Team workspaces / invites | 🟡 Preview / gated |
+| Team workspaces / invites | 🔴 Disabled locally — reserved for future hosted product |
 | Cross-device cloud **sync** | 🟡 Staged — adapter written, **not wired**; `use-sync.ts` returns `coming-soon` |
 
 ## Future hardening

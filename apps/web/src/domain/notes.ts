@@ -1,9 +1,11 @@
 import { z } from 'zod'
 import type { DraftContext } from './ideas'
 
+export const MAX_VOICE_RECORDING_DATA_URL_LENGTH = 10_000_000
+
 export const voiceRecordingSchema = z.object({
   id: z.string().uuid(),
-  dataUrl: z.string(),
+  dataUrl: z.string().max(MAX_VOICE_RECORDING_DATA_URL_LENGTH),
   durationMs: z.number().int().min(0),
   createdAt: z.string().datetime(),
 })

@@ -86,6 +86,12 @@ Deno.serve(async (request) => {
     .maybeSingle()
   if (configError || !config) return json(404, { error: 'Provider config not found.' })
 
+  if (config.scope === 'workspace') {
+    if (!body.workspaceId || body.workspaceId !== config.workspace_id) {
+      return json(403, { error: 'Workspace-scoped provider config must match the requested workspace.' })
+    }
+  }
+
   const cost = AI_ACTION_COSTS[body.actionType] ?? 1
   const isByok = Boolean(config.vault_secret_id)
 

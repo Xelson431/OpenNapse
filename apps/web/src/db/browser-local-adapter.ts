@@ -2,7 +2,7 @@ import type { DBAdapter, SyncOutboxEntry } from './adapter'
 import { createIdeaDraft, ideaSchema, type CreateIdeaInput, type DraftContext, type Idea } from '../domain/ideas'
 import { createNoteDraft, noteSchema, type Note, type UpsertNoteInput } from '../domain/notes'
 import { createProjectDraft, createProjectFromIdea, projectSchema, type CreateProjectInput, type Project, type PromoteIdeaInput } from '../domain/projects'
-import { createFirstStepTask, createTaskDraft, taskSchema, type CreateTaskInput, type Task, type TaskColumn } from '../domain/tasks'
+import { createFirstStepTask, createTaskDraft, taskSchema, type CreateTaskInput, type Task, type TaskColumn, type UpdateTaskInput } from '../domain/tasks'
 import {
   LOCAL_PERSONAL_WORKSPACE_ID,
   createDefaultPersonalWorkspaceRecord,
@@ -240,8 +240,24 @@ export class BrowserLocalAdapter implements DBAdapter {
     const updated = taskSchema.parse({
       ...existing,
       columnId,
+      sortOrder: Date.now(),
       completedAt: columnId === 'done' ? new Date().toISOString() : null,
       completionPct: columnId === 'done' ? 100 : existing.completionPct,
+      updatedAt: new Date().toISOString(),
+      version: existing.version + 1,
+    })
+    await this.backend.write(TASKS_KEY, tasks.map((task) => (task.id === id ? updated : task)))
+    await this.enqueue('tasks', updated.id, 'update', updated)
+    return updated
+  }
+
+  async updateTask(id: string, input: UpdateTaskInput): Promise<Task> {
+    const tasks = await this.readCollection(TASKS_KEY, taskSchema)
+    const existing = tasks.find((task) => task.id === id)
+    if (!existing) throw new Error('Task not found')
+    const updated = taskSchema.parse({
+      ...existing,
+      ...input,
       updatedAt: new Date().toISOString(),
       version: existing.version + 1,
     })

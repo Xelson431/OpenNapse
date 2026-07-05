@@ -38,6 +38,7 @@ Plan the work. Five columns: **backlog → todo → in_progress → review → d
 - Native HTML5 drag-and-drop (`DraggableTaskCard` + `DroppableKanbanColumn`).
 - Keyboard movement: focus a card and use `Alt+Arrow` to move it between columns — no mouse required.
 - Tasks belong to a project (`projectId`), can optionally link to an idea, and track `completionPct` / `completedAt`.
+- Optional `scheduledDate` and `dueDate` fields add a lightweight "today / overdue" strip without turning Kanban into a full calendar app.
 
 Open quickly with `⌘2`.
 
@@ -59,9 +60,11 @@ A map of your thinking. An SVG node/edge graph showing how ideas, projects, task
 
 ## Focus (`FocusView`)
 
-A distraction-free surface for what matters today. Shows your top open tasks so you can do the one thing in front of you.
+A distraction-free surface for what matters today. Shows your top open tasks and includes **Focus Sprint**, a Pomodoro-style timer linked to a Kanban task or idea.
 
 - Enter with `⌘⇧F` ("Flow mode").
+- Focus Sprint is the generic OpenNapse module name. Do not call it "Pomodone" in-product; Pomodone/PomoDone is a third-party brand, while Pomodoro-style timeboxing is the generic method.
+- A sprint must be linked to one task or idea so timeboxing stays attached to actual workspace entities.
 
 ## Stats (`StatsView`)
 

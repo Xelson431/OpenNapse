@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveSupabaseEnv } from './env'
+import { resolveBillingEnv, resolveSupabaseEnv } from './env'
 
 describe('resolveSupabaseEnv', () => {
   it('reports missing config when no variables are present', () => {
@@ -34,6 +34,24 @@ describe('resolveSupabaseEnv', () => {
       configured: true,
       mode: 'configured',
       projectHost: 'demo-project.supabase.co',
+    })
+  })
+})
+
+describe('resolveBillingEnv', () => {
+  it('reports missing config when billing URL is absent', () => {
+    expect(resolveBillingEnv({})).toMatchObject({ configured: false, mode: 'missing' })
+  })
+
+  it('rejects invalid billing URLs', () => {
+    expect(resolveBillingEnv({ VITE_BILLING_URL: 'billing.local' })).toMatchObject({ configured: false, mode: 'invalid' })
+  })
+
+  it('returns host metadata for a valid billing URL', () => {
+    expect(resolveBillingEnv({ VITE_BILLING_URL: 'https://billing.example.com' })).toMatchObject({
+      configured: true,
+      mode: 'configured',
+      host: 'billing.example.com',
     })
   })
 })

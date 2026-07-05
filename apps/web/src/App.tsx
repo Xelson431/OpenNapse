@@ -8,23 +8,28 @@ import { requestMagicLink, signOutOfSupabase, useAuthStatus, type AuthStatus } f
 import { usePersonalWorkspaceBootstrap, type PersonalWorkspaceBootstrapStatus } from './auth/use-personal-workspace-bootstrap'
 import { acceptInvite, inviteWorkspaceMember, listWorkspaceInvites, listWorkspaceMembers, revokeWorkspaceInvite, removeWorkspaceMember, type InviteRole, type WorkspaceInvite, type WorkspaceMember } from './auth/teams'
 import { getTodayBalance, listRecentUsage, type DailyCreditBalance, type UsageEvent } from './auth/credits'
+import { createBillingPortalSession, createCheckoutSession, useSubscriptionStatus } from './auth/billing'
 import { listAuditLog, type AuditEntry } from './auth/audit'
 import { Icon, type IconName } from './components/Icon'
-import { getSupabaseEnv, type ResolvedSupabaseEnv } from './config/env'
+import { PricingModal } from './components/PricingModal'
+import { getBillingEnv, getSupabaseEnv, type ResolvedSupabaseEnv } from './config/env'
 import { enhanceIdeaTitle, generateLocalAISuggestions } from './domain/ai'
 import { generateMentorReply, type MentorContext } from './domain/mentor'
 import type { FeatureDefinition } from './domain/features'
 import { getIdeaTemperature, type Idea } from './domain/ideas'
-import type { Note, VoiceRecording } from './domain/notes'
+import { MAX_VOICE_RECORDING_DATA_URL_LENGTH, type Note, type VoiceRecording } from './domain/notes'
 import type { Project } from './domain/projects'
 import { calculateStats } from './domain/stats'
-import { taskColumns, type Task, type TaskColumn } from './domain/tasks'
-import { createActiveWorkspace, createActiveWorkspaceFromRecord, workspaceModes, type ActiveWorkspace, type WorkspaceMode } from './domain/workspaces'
+import { taskColumns, type CreateTaskInput, type Task, type TaskColumn, type UpdateTaskInput } from './domain/tasks'
+import { LOCAL_PERSONAL_WORKSPACE_ID, createActiveWorkspace, createActiveWorkspaceFromRecord, workspaceModes, type ActiveWorkspace, type WorkspaceMode } from './domain/workspaces'
 import { IDEA_DRAG_MIME, hasIdeaDragPayload, readIdeaDragPayload } from './lib/drag'
 import { useSyncStatus } from './sync/use-sync'
 import { useIdeasStore } from './stores/use-ideas-store'
 import { toPromoteInput, useWorkspaceStore } from './stores/use-workspace-store'
 import { useWorkspacesStore } from './stores/use-workspaces-store'
+import { setDb } from './db/get-db'
+import { createSupabaseCloudAdapter } from './db/supabase-cloud-adapter'
+import { BrowserLocalAdapter } from './db/browser-local-adapter'
 
 type ViewId = 'capture' | 'dashboard' | 'kanban' | 'notes' | 'graph' | 'focus' | 'stats'
 type ThemeMode = 'light' | 'dark'
@@ -35,6 +40,10 @@ type MentorSession = {
   createdAt: string
   updatedAt: string
   messages: { id: string; role: MentorRole; content: string; createdAt: string }[]
+}
+type LocalCloudMigrationPrompt = {
+  payload: string
+  counts: { ideas: number; projects: number; tasks: number; notes: number }
 }
 type SidebarFilter =
   | { kind: 'all' }
@@ -68,7 +77,27 @@ function clampGraphPoint(value: number) {
 const THEME_STORAGE_KEY = 'OpenNapse:v0:theme'
 const MENTOR_STORAGE_KEY = 'OpenNapse:v0:mentor-sessions'
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'OpenNapse:v0:sidebar-collapsed'
+const CLOUD_MIGRATION_DISMISSED_STORAGE_KEY = 'OpenNapse:v0:cloud-migration-dismissed'
 const MOBILE_MEDIA_QUERY = '(max-width: 640px)'
+const ENABLE_TEAM_WORKSPACES = false
+
+function countExportPayload(payload: string): LocalCloudMigrationPrompt['counts'] {
+  try {
+    const parsed = JSON.parse(payload) as { ideas?: unknown[]; projects?: unknown[]; tasks?: unknown[]; notes?: unknown[] }
+    return {
+      ideas: Array.isArray(parsed.ideas) ? parsed.ideas.length : 0,
+      projects: Array.isArray(parsed.projects) ? parsed.projects.length : 0,
+      tasks: Array.isArray(parsed.tasks) ? parsed.tasks.length : 0,
+      notes: Array.isArray(parsed.notes) ? parsed.notes.length : 0,
+    }
+  } catch {
+    return { ideas: 0, projects: 0, tasks: 0, notes: 0 }
+  }
+}
+
+function hasExportedContent(counts: LocalCloudMigrationPrompt['counts']): boolean {
+  return counts.ideas + counts.projects + counts.tasks + counts.notes > 0
+}
 
 function isMobileViewport(): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
@@ -129,14 +158,20 @@ function App() {
   const [sessionKeys, setSessionKeys] = useState<Record<string, string>>({})
   const [acceptedPreviewHash, setAcceptedPreviewHash] = useState<string | undefined>()
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null)
+  const [cloudMigrationPrompt, setCloudMigrationPrompt] = useState<LocalCloudMigrationPrompt | null>(null)
+  const [cloudMigrationMessage, setCloudMigrationMessage] = useState('')
   const { ideas, isLoaded, loadIdeas, createIdea, buryIdea, resurrectIdea, moveIdeaToProject, clearAllData: clearIdeas } = useIdeasStore()
-  const { projects, tasks, notes, loadWorkspace, createProject, promoteIdea, createTask, moveTask, upsertNote, exportData, importData, clearAllData: clearWorkspace } = useWorkspaceStore()
+  const { projects, tasks, notes, loadWorkspace, createProject, promoteIdea, createTask, moveTask, updateTask, upsertNote, exportData, importData, clearAllData: clearWorkspace } = useWorkspaceStore()
   const supabaseEnv = useMemo(() => getSupabaseEnv(), [])
   const authStatus = useAuthStatus()
   const workspaceBootstrap = usePersonalWorkspaceBootstrap(authStatus)
   const activeWorkspaceRecord = useMemo(
     () => workspaces.find((w) => w.id === activeWorkspaceId),
     [workspaces, activeWorkspaceId],
+  )
+  const visibleWorkspaces = useMemo(
+    () => (ENABLE_TEAM_WORKSPACES ? workspaces : workspaces.filter((workspace) => workspace.type !== 'team')),
+    [workspaces],
   )
   const activeWorkspace = useMemo<ActiveWorkspace>(
     () => (activeWorkspaceRecord ? createActiveWorkspaceFromRecord(activeWorkspaceRecord) : createActiveWorkspace(workspaceMode)),
@@ -168,6 +203,58 @@ function App() {
     void loadIdeas()
     void loadWorkspace()
   }, [activeWorkspaceId, loadIdeas, loadWorkspace])
+
+  useEffect(() => {
+    if (ENABLE_TEAM_WORKSPACES) return
+    if (activeWorkspaceRecord?.type !== 'team') return
+    setActiveWorkspace(LOCAL_PERSONAL_WORKSPACE_ID)
+  }, [activeWorkspaceRecord, setActiveWorkspace])
+
+  const activeUserIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    void (async () => {
+      if (authStatus.mode === 'signed-in' && authStatus.userId && workspaceBootstrap?.mode === 'ready' && workspaceBootstrap.workspaceId) {
+        if (activeUserIdRef.current === authStatus.userId) return
+        activeUserIdRef.current = authStatus.userId
+        const localAdapter = new BrowserLocalAdapter()
+        localAdapter.setActiveWorkspaceId(activeWorkspaceId)
+        const localPayload = await localAdapter.exportData()
+        const localCounts = countExportPayload(localPayload)
+        const cloudAdapter = createSupabaseCloudAdapter()
+        cloudAdapter.setActiveWorkspaceId(workspaceBootstrap.workspaceId)
+        const [cloudIdeas, cloudProjects, cloudTasks, cloudNotes] = await Promise.all([
+          cloudAdapter.listIdeas(),
+          cloudAdapter.listProjects(),
+          cloudAdapter.listTasks(),
+          cloudAdapter.listNotes(),
+        ])
+        setDb(cloudAdapter)
+        await loadWorkspaces()
+        await loadIdeas()
+        await loadWorkspace()
+        const dismissedForUser = (() => {
+          try {
+            return localStorage.getItem(CLOUD_MIGRATION_DISMISSED_STORAGE_KEY) === authStatus.userId
+          } catch {
+            return false
+          }
+        })()
+        const cloudEmpty = cloudIdeas.length + cloudProjects.length + cloudTasks.length + cloudNotes.length === 0
+        if (!dismissedForUser && cloudEmpty && hasExportedContent(localCounts)) {
+          setCloudMigrationPrompt({ payload: localPayload, counts: localCounts })
+        }
+        return
+      }
+      if (authStatus.mode === 'signed-out' || authStatus.mode === 'unavailable') {
+        activeUserIdRef.current = null
+        setCloudMigrationPrompt(null)
+        setDb(new BrowserLocalAdapter())
+        await loadWorkspaces()
+        await loadIdeas()
+        await loadWorkspace()
+      }
+    })()
+  }, [authStatus, workspaceBootstrap, activeWorkspaceId, loadIdeas, loadWorkspace, loadWorkspaces])
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -269,6 +356,7 @@ function App() {
   }, [sidebarCollapsed])
 
   useEffect(() => {
+    if (!ENABLE_TEAM_WORKSPACES) return
     if (authStatus.mode !== 'signed-in') return
     if (typeof window === 'undefined') return
     const params = new URLSearchParams(window.location.search)
@@ -430,7 +518,7 @@ function App() {
                   setActiveWorkspace(value)
                 }}
               >
-                {workspaces.map((workspace) => (
+                {visibleWorkspaces.map((workspace) => (
                   <option key={workspace.id} value={workspace.id}>
                     {workspace.name}
                     {workspace.type === 'team' ? ' · team' : ''}
@@ -532,7 +620,7 @@ function App() {
             />
           )}
           {activeView === 'kanban' && (
-            <KanbanView projects={projects} tasks={tasks} activeProjectId={selectedProjectId} onMoveTask={moveTask} onCreateTask={createTask} />
+            <KanbanView projects={projects} tasks={tasks} activeProjectId={selectedProjectId} onMoveTask={moveTask} onCreateTask={createTask} onUpdateTask={updateTask} />
           )}
           {activeView === 'notes' && (
             <NotesView notes={notes} projects={projects} sidebarFilter={sidebarFilter} onSave={upsertNote} />
@@ -541,7 +629,7 @@ function App() {
             <GraphView ideas={activeIdeas} projects={projects} tasks={tasks} notes={notes} selectedProjectId={selectedProjectId} />
           )}
           {activeView === 'focus' && (
-            <FocusView tasks={tasks} selectedProjectId={selectedProjectId} onMoveTask={moveTask} />
+            <FocusView ideas={activeIdeas} tasks={tasks} selectedProjectId={selectedProjectId} onMoveTask={moveTask} />
           )}
           {activeView === 'stats' && (
             <StatsView ideas={ideas} projects={projects} tasks={tasks} notes={notes} exportData={exportData} importData={importData} reload={async () => { await loadIdeas(); await loadWorkspace() }} onLoadDemoData={async () => { await importData(JSON.stringify(dummyData)); await loadIdeas(); await loadWorkspace() }} />
@@ -658,6 +746,7 @@ function App() {
       )}
       {isCreateWorkspaceOpen && (
         <CreateWorkspaceModal
+          allowTeamWorkspaces={ENABLE_TEAM_WORKSPACES && supabaseEnv.configured && authStatus.mode === 'signed-in'}
           onCreate={async (name, type) => {
             const record = await createWorkspaceRecord({ name, type })
             setActiveWorkspace(record.id)
@@ -665,8 +754,79 @@ function App() {
           onClose={() => setIsCreateWorkspaceOpen(false)}
         />
       )}
+      {cloudMigrationPrompt ? (
+        <CloudMigrationPrompt
+          prompt={cloudMigrationPrompt}
+          message={cloudMigrationMessage}
+          onDismiss={() => {
+            try {
+              if (authStatus.userId) localStorage.setItem(CLOUD_MIGRATION_DISMISSED_STORAGE_KEY, authStatus.userId)
+            } catch {
+              // ignore storage failures
+            }
+            setCloudMigrationPrompt(null)
+            setCloudMigrationMessage('')
+          }}
+          onMigrate={async () => {
+            setCloudMigrationMessage('Migrating local data to your cloud workspace…')
+            await importData(cloudMigrationPrompt.payload)
+            await loadIdeas()
+            await loadWorkspace()
+            setCloudMigrationMessage('Local data migrated to cloud.')
+            setCloudMigrationPrompt(null)
+          }}
+        />
+      ) : null}
       <TutorialOverlay hasContent={ideas.length + projects.length > 0} />
     </main>
+  )
+}
+
+function CloudMigrationPrompt({ prompt, message, onMigrate, onDismiss }: {
+  prompt: LocalCloudMigrationPrompt
+  message: string
+  onMigrate: () => Promise<void>
+  onDismiss: () => void
+}) {
+  const [isMigrating, setIsMigrating] = useState(false)
+  return (
+    <div className="modal-overlay" onClick={onDismiss}>
+      <section className="brain-dump-modal" role="dialog" aria-modal="true" aria-labelledby="cloud-migration-title" onClick={(event) => event.stopPropagation()}>
+        <div className="brain-dump-header">
+          <div>
+            <p className="eyebrow">Cloud workspace</p>
+            <h3 id="cloud-migration-title">Move local data to cloud?</h3>
+          </div>
+          <button type="button" className="btn btn-ghost" onClick={onDismiss}>Skip</button>
+        </div>
+        <p className="settings-muted">
+          Your Supabase workspace is empty, but this browser has local content. Importing copies the current local workspace into cloud without deleting local data.
+        </p>
+        <div className="stats-grid" aria-label="Local data available to migrate">
+          <div className="stat-card"><span>Ideas</span><strong>{prompt.counts.ideas}</strong></div>
+          <div className="stat-card"><span>Projects</span><strong>{prompt.counts.projects}</strong></div>
+          <div className="stat-card"><span>Tasks</span><strong>{prompt.counts.tasks}</strong></div>
+          <div className="stat-card"><span>Notes</span><strong>{prompt.counts.notes}</strong></div>
+        </div>
+        <div className="settings-actions">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={isMigrating}
+            onClick={async () => {
+              setIsMigrating(true)
+              try {
+                await onMigrate()
+              } finally {
+                setIsMigrating(false)
+              }
+            }}
+          >{isMigrating ? 'Migrating…' : 'Import to cloud'}</button>
+          <button type="button" className="btn btn-secondary" onClick={onDismiss} disabled={isMigrating}>Remind me later</button>
+        </div>
+        {message ? <p className="settings-status">{message}</p> : null}
+      </section>
+    </div>
   )
 }
 
@@ -919,11 +1079,14 @@ function DraggableIdeaRecord({ idea, index, canDrag }: { idea: Idea; index: numb
   )
 }
 
-function KanbanView({ projects, tasks, activeProjectId, onMoveTask, onCreateTask }: { projects: Project[]; tasks: Task[]; activeProjectId?: string; onMoveTask: (id: string, columnId: TaskColumn) => Promise<void>; onCreateTask: (input: { projectId: string; title: string }) => Promise<void> }) {
+function KanbanView({ projects, tasks, activeProjectId, onMoveTask, onCreateTask, onUpdateTask }: { projects: Project[]; tasks: Task[]; activeProjectId?: string; onMoveTask: (id: string, columnId: TaskColumn) => Promise<void>; onCreateTask: (input: CreateTaskInput) => Promise<void>; onUpdateTask: (id: string, input: UpdateTaskInput) => Promise<void> }) {
   const activeProject = projects.find((project) => project.id === activeProjectId) ?? projects[0]
   const visibleTasks = activeProject ? tasks.filter((task) => task.projectId === activeProject.id) : tasks
-  const [taskTitle, setTaskTitle] = useState('')
-  const quickTaskRef = useRef<HTMLInputElement>(null)
+  const today = getTodayDateInputValue()
+  const plannedToday = visibleTasks
+    .filter((task) => task.columnId !== 'done')
+    .filter((task) => task.scheduledDate === today || (!!task.dueDate && task.dueDate <= today))
+  const newTaskFormRef = useRef<HTMLDivElement>(null)
 
   return (
     <div className="kanban view-enter">
@@ -933,27 +1096,93 @@ function KanbanView({ projects, tasks, activeProjectId, onMoveTask, onCreateTask
           <p id="kanban-keyboard-help" className="kanban-a11y-hint">Keyboard: focus a card, then press Alt + ←/→ to move it.</p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-primary" onClick={() => quickTaskRef.current?.focus()}><Icon name="plus" /> New Task</button>
+          <button className="btn btn-primary" onClick={() => { newTaskFormRef.current?.querySelector<HTMLInputElement>('[aria-label="New task title"]')?.focus() }}><Icon name="plus" /> New Task</button>
         </div>
       </div>
 
+      {plannedToday.length > 0 ? (
+        <section className="kanban-today" aria-label="Today and overdue tasks">
+          <div>
+            <span className="kanban-today-label">Today</span>
+            <strong>{plannedToday.length} planned or due</strong>
+          </div>
+          <div className="kanban-today-list">
+            {plannedToday.slice(0, 4).map((task) => (
+              <span key={task.id} className="kanban-today-chip">
+                {task.title}
+                {task.dueDate && task.dueDate <= today ? <em>{task.dueDate < today ? 'overdue' : 'due'}</em> : null}
+              </span>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <div className="kanban-columns">
         {taskColumns.map((column) => (
-          <DroppableKanbanColumn key={column.id} column={column} tasks={visibleTasks.filter((task) => task.columnId === column.id)} onMoveTask={onMoveTask} />
+          <DroppableKanbanColumn key={column.id} column={column} tasks={visibleTasks.filter((task) => task.columnId === column.id)} onMoveTask={onMoveTask} onUpdateTask={onUpdateTask} />
         ))}
       </div>
 
       {activeProject ? (
-        <form className="quick-task-form" onSubmit={(event) => { event.preventDefault(); if (!taskTitle.trim()) return; void onCreateTask({ projectId: activeProject.id, title: taskTitle.trim() }).then(() => setTaskTitle('')) }}>
-          <input ref={quickTaskRef} aria-label="New task title" value={taskTitle} onChange={(event) => setTaskTitle(event.target.value)} placeholder="Add another task to this project..." />
-          <button className="btn btn-primary" type="submit">Add task</button>
-        </form>
+        <div ref={newTaskFormRef}>
+          <QuickTaskForm projectId={activeProject.id} onCreateTask={onCreateTask} />
+        </div>
       ) : null}
     </div>
   )
 }
 
-function DroppableKanbanColumn({ column, tasks, onMoveTask }: { column: { id: TaskColumn; label: string }; tasks: Task[]; onMoveTask: (id: string, columnId: TaskColumn) => Promise<void> }) {
+function QuickTaskForm({ projectId, onCreateTask }: { projectId: string; onCreateTask: (input: CreateTaskInput) => Promise<void> }) {
+  const [taskTitle, setTaskTitle] = useState('')
+  const [scheduledDate, setScheduledDate] = useState('')
+  const [dueDate, setDueDate] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const quickTaskRef = useRef<HTMLInputElement>(null)
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault()
+    if (!taskTitle.trim() || submitting) return
+    setSubmitting(true)
+    try {
+      await onCreateTask({ projectId, title: taskTitle.trim(), scheduledDate: scheduledDate || null, dueDate: dueDate || null })
+      setTaskTitle('')
+      setScheduledDate('')
+      setDueDate('')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <form className="quick-task-form" onSubmit={handleSubmit}>
+      <input ref={quickTaskRef} aria-label="New task title" value={taskTitle} onChange={(event) => setTaskTitle(event.target.value)} placeholder="Add another task to this project..." />
+      <label className="quick-task-date">
+        Plan
+        <input aria-label="Planned date" type="date" value={scheduledDate} onChange={(event) => setScheduledDate(event.target.value)} />
+      </label>
+      <label className="quick-task-date">
+        Due
+        <input aria-label="Due date" type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />
+      </label>
+      <button className="btn btn-primary" type="submit" disabled={submitting}>Add task</button>
+    </form>
+  )
+}
+
+function getTodayDateInputValue(): string {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+function formatTaskDate(value: string): string {
+  const [y, m, d] = value.split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+function DroppableKanbanColumn({ column, tasks, onMoveTask, onUpdateTask }: { column: { id: TaskColumn; label: string }; tasks: Task[]; onMoveTask: (id: string, columnId: TaskColumn) => Promise<void>; onUpdateTask: (id: string, input: UpdateTaskInput) => Promise<void> }) {
   const [isOver, setIsOver] = useState(false)
   return (
     <div
@@ -975,7 +1204,7 @@ function DroppableKanbanColumn({ column, tasks, onMoveTask }: { column: { id: Ta
         <span className="kanban-column-count">{tasks.length}</span>
       </div>
       <div className="kanban-cards">
-        {tasks.map((task, i) => <DraggableTaskCard key={task.id} task={task} index={i} onMoveTask={onMoveTask} />)}
+        {tasks.map((task, i) => <DraggableTaskCard key={task.id} task={task} index={i} onMoveTask={onMoveTask} onUpdateTask={onUpdateTask} />)}
         {tasks.length === 0 ? <p className="kanban-add-card" style={{border: '1px dashed var(--border)'}}>Drop tasks here</p> : null}
       </div>
     </div>
@@ -987,8 +1216,34 @@ function getAdjacentColumnId(columnId: TaskColumn, direction: -1 | 1): TaskColum
   return taskColumns[currentIndex + direction]?.id
 }
 
-function DraggableTaskCard({ task, index, onMoveTask }: { task: Task; index: number; onMoveTask: (id: string, columnId: TaskColumn) => Promise<void> }) {
+function DraggableTaskCard({ task, index, onMoveTask, onUpdateTask }: { task: Task; index: number; onMoveTask: (id: string, columnId: TaskColumn) => Promise<void>; onUpdateTask: (id: string, input: UpdateTaskInput) => Promise<void> }) {
   const [isDragging, setIsDragging] = useState(false)
+  const [editingDate, setEditingDate] = useState<'scheduledDate' | 'dueDate' | null>(null)
+  const [editValue, setEditValue] = useState('')
+  const editRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (editingDate) editRef.current?.focus()
+  }, [editingDate])
+
+  function startEdit(field: 'scheduledDate' | 'dueDate') {
+    setEditValue(task[field] ?? '')
+    setEditingDate(field)
+  }
+
+  async function commitEdit() {
+    const field = editingDate
+    if (!field) return
+    setEditingDate(null)
+    const value = editValue || null
+    if (value === task[field]) return
+    await onUpdateTask(task.id, { [field]: value } as UpdateTaskInput)
+  }
+
+  function cancelEdit() {
+    setEditingDate(null)
+  }
+
   return (
     <div
       className={isDragging ? 'kanban-card is-dragging' : 'kanban-card'}
@@ -1012,6 +1267,28 @@ function DraggableTaskCard({ task, index, onMoveTask }: { task: Task; index: num
       }}
     >
       <div className="kanban-card-title">{task.title}</div>
+      <div className="kanban-card-dates">
+        {editingDate === 'scheduledDate' ? (
+          <span className="kanban-date-edit">
+            Plan
+            <input ref={editRef} aria-label="Planned date" type="date" value={editValue} onChange={(e) => setEditValue(e.target.value)} onBlur={() => void commitEdit()} onKeyDown={(e) => { if (e.key === 'Enter') void commitEdit(); if (e.key === 'Escape') cancelEdit() }} />
+          </span>
+        ) : task.scheduledDate ? (
+          <span role="button" tabIndex={0} aria-label="Edit planned date" onClick={() => startEdit('scheduledDate')} onKeyDown={(e) => { if (e.key === 'Enter') startEdit('scheduledDate') }}>Plan {formatTaskDate(task.scheduledDate)}</span>
+        ) : (
+          <span role="button" tabIndex={0} aria-label="Set planned date" className="kanban-date-empty" onClick={() => startEdit('scheduledDate')} onKeyDown={(e) => { if (e.key === 'Enter') startEdit('scheduledDate') }}>+ Plan</span>
+        )}
+        {editingDate === 'dueDate' ? (
+          <span className="kanban-date-edit">
+            Due
+            <input ref={editRef} aria-label="Due date" type="date" value={editValue} onChange={(e) => setEditValue(e.target.value)} onBlur={() => void commitEdit()} onKeyDown={(e) => { if (e.key === 'Enter') void commitEdit(); if (e.key === 'Escape') cancelEdit() }} />
+          </span>
+        ) : task.dueDate ? (
+          <span role="button" tabIndex={0} aria-label="Edit due date" className={task.dueDate < getTodayDateInputValue() && task.columnId !== 'done' ? 'overdue' : ''} onClick={() => startEdit('dueDate')} onKeyDown={(e) => { if (e.key === 'Enter') startEdit('dueDate') }}>Due {formatTaskDate(task.dueDate)}</span>
+        ) : (
+          <span role="button" tabIndex={0} aria-label="Set due date" className="kanban-date-empty" onClick={() => startEdit('dueDate')} onKeyDown={(e) => { if (e.key === 'Enter') startEdit('dueDate') }}>+ Due</span>
+        )}
+      </div>
       <div className="kanban-card-meta">
         <span className={`kanban-priority ${task.priority.toLowerCase()}`}>{task.priority}</span>
         <span style={{fontSize: 11, color: 'var(--muted)'}}>{task.completionPct}%</span>
@@ -1070,12 +1347,27 @@ function escapeHtml(text: string): string {
   return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
 }
 
+function sanitizeMarkdownHref(href: string): string {
+  const trimmed = href.trim()
+  const stripped = trimmed.replace(/[\p{Cf}\u200B-\u200F\u2028-\u202F\uFEFF]/gu, '')
+  const normalized = Array.from(stripped).filter((char) => char.charCodeAt(0) > 0x20 && char.charCodeAt(0) !== 0x7f).join('').toLowerCase()
+  if (
+    normalized.startsWith('javascript:')
+    || normalized.startsWith('data:')
+    || normalized.startsWith('vbscript:')
+    || normalized.startsWith('file:')
+  ) {
+    return '#'
+  }
+  return trimmed || '#'
+}
+
 function renderMarkdown(md: string): string {
   return escapeHtml(md)
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, href: string) => `<a href="${sanitizeMarkdownHref(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`)
     .replace(/^- (.+)$/gm, '<li>$1</li>')
     .replace(/(<li>.+<\/li>\n?)+/g, '<ul>$&</ul>')
 }
@@ -1098,14 +1390,17 @@ function NoteEditor({ activeId, notes, projects, selectedProjectId, onSave }: { 
   const [isRecording, setIsRecording] = useState(false)
   const [recordings, setRecordings] = useState<VoiceRecording[]>(initialNote?.voiceRecordings ?? [])
   const [previewMode, setPreviewMode] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const chunksRef = useRef<Blob[]>([])
   const startTimeRef = useRef<number>(0)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const mountedRef = useRef(true)
 
   useEffect(() => {
     return () => {
+      mountedRef.current = false
       if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
         mediaRecorderRef.current.stop()
       }
@@ -1153,7 +1448,12 @@ function NoteEditor({ activeId, notes, projects, selectedProjectId, onSave }: { 
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' })
         const reader = new FileReader()
         reader.onloadend = () => {
+          if (!mountedRef.current) return
           const dataUrl = reader.result as string
+          if (dataUrl.length > MAX_VOICE_RECORDING_DATA_URL_LENGTH) {
+            setIsRecording(false)
+            return
+          }
           const durationMs = Date.now() - startTimeRef.current
           setRecordings((prev) => [...prev, {
             id: crypto.randomUUID(),
@@ -1219,7 +1519,7 @@ function NoteEditor({ activeId, notes, projects, selectedProjectId, onSave }: { 
           </button>
         </div>
         {isRecording && <span className="note-recording-indicator">Recording…</span>}
-        <form className="notes-editor-content" onSubmit={(event) => { event.preventDefault(); void onSave({ id: activeId, title, content, linkedProjectId: linkedProjectId || null, voiceRecordings: recordings }) }}>
+        <form className="notes-editor-content" onSubmit={async (event) => { event.preventDefault(); if (submitting) return; setSubmitting(true); try { await onSave({ id: activeId, title, content, linkedProjectId: linkedProjectId || null, voiceRecordings: recordings }) } finally { setSubmitting(false) } }}>
           <h3 className="sr-only" style={{display: 'none'}}>Local document</h3>
           <input className="note-title-input" aria-label="Note title" value={title} onChange={(event) => setTitle(event.target.value)} />
           {previewMode ? (
@@ -1237,7 +1537,7 @@ function NoteEditor({ activeId, notes, projects, selectedProjectId, onSave }: { 
               ))}
             </div>
           )}
-          <button className="btn btn-primary" type="submit">Save note</button>
+          <button className="btn btn-primary" type="submit" disabled={submitting}>Save note</button>
         </form>
       </div>
 
@@ -1712,18 +2012,92 @@ function GraphView({ ideas, projects, tasks, notes, selectedProjectId }: { ideas
   )
 }
 
-function FocusView({ tasks, selectedProjectId, onMoveTask }: { tasks: Task[]; selectedProjectId?: string; onMoveTask: (id: string, columnId: TaskColumn) => Promise<void> }) {
+function FocusView({ ideas, tasks, selectedProjectId, onMoveTask }: { ideas: Idea[]; tasks: Task[]; selectedProjectId?: string; onMoveTask: (id: string, columnId: TaskColumn) => Promise<void> }) {
   const projectTasks = selectedProjectId ? tasks.filter((task) => task.projectId === selectedProjectId) : tasks
-  const openTasks = projectTasks.filter((task) => task.columnId !== 'done').slice(0, 5)
+  const openTasks = projectTasks.filter((task) => task.columnId !== 'done').slice(0, 8)
+  const focusableIdeas = ideas.filter((idea) => idea.status !== 'done' && idea.status !== 'buried').slice(0, 8)
+  const [linkedTarget, setLinkedTarget] = useState('')
+  const [mode, setMode] = useState<'work' | 'short-break'>('work')
+  const [durationMinutes, setDurationMinutes] = useState(25)
+  const [remainingSeconds, setRemainingSeconds] = useState(25 * 60)
+  const [isRunning, setIsRunning] = useState(false)
+  const [completedSessions, setCompletedSessions] = useState(0)
+  const targetOptions = useMemo(() => [
+    ...openTasks.map((task) => ({ id: `task:${task.id}`, kind: 'Task' as const, label: task.title })),
+    ...focusableIdeas.map((idea) => ({ id: `idea:${idea.id}`, kind: 'Idea' as const, label: idea.title })),
+  ], [focusableIdeas, openTasks])
+  const activeTarget = targetOptions.find((option) => option.id === linkedTarget) ?? targetOptions[0]
+
+  useEffect(() => {
+    if (!isRunning) return
+    const timer = window.setInterval(() => {
+      setRemainingSeconds((current) => {
+        if (current <= 1) {
+          window.clearInterval(timer)
+          setIsRunning(false)
+          setCompletedSessions((count) => count + 1)
+          return 0
+        }
+        return current - 1
+      })
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [isRunning])
+
+  const totalSeconds = durationMinutes * 60
+  const elapsedPct = totalSeconds > 0 ? Math.round(((totalSeconds - remainingSeconds) / totalSeconds) * 100) : 0
+  const minutes = Math.floor(remainingSeconds / 60).toString().padStart(2, '0')
+  const seconds = (remainingSeconds % 60).toString().padStart(2, '0')
+  const activeTaskId = activeTarget?.id.startsWith('task:') ? activeTarget.id.slice(5) : null
+  const activeTask = activeTaskId ? tasks.find((task) => task.id === activeTaskId) : null
+
+  const resetSprint = (nextMode: 'work' | 'short-break', minutesValue: number) => {
+    setMode(nextMode)
+    setDurationMinutes(minutesValue)
+    setRemainingSeconds(minutesValue * 60)
+    setIsRunning(false)
+  }
+
   return (
     <div className="view-enter" style={{paddingTop: 16}}>
       <div className="page-hero">
         <div>
           <p className="eyebrow">Daily focus</p>
           <h2>Spend your cognitive budget deliberately.</h2>
-          <p>Pick from active tasks, preserve flow, and mark progress without leaving the local workspace.</p>
+          <p>Focus Sprint links a timed work block to one Kanban task or idea, so the timer always belongs to real work.</p>
         </div>
       </div>
+      <section className="focus-sprint-panel" aria-labelledby="focus-sprint-title">
+        <div className="focus-sprint-copy">
+          <p className="eyebrow">Focus Sprint</p>
+          <h3 id="focus-sprint-title">A linked timer, not a floating stopwatch.</h3>
+          <p>Pomodone is a product/brand name. The generic method is Pomodoro-style timeboxing; here it becomes a Focus Sprint tied to an OpenNapse entity.</p>
+          <label className="settings-field">
+            <span>Link this sprint to</span>
+            <select value={linkedTarget} onChange={(event) => setLinkedTarget(event.target.value)} disabled={targetOptions.length === 0 || isRunning}>
+              {targetOptions.length === 0 ? <option>No tasks or ideas available</option> : null}
+              {targetOptions.map((option) => <option key={option.id} value={option.id}>{option.kind}: {option.label}</option>)}
+            </select>
+          </label>
+          <div className="focus-sprint-modes" role="group" aria-label="Focus sprint mode">
+            <button type="button" className={mode === 'work' && durationMinutes === 25 ? 'active' : ''} onClick={() => resetSprint('work', 25)}>25 min work</button>
+            <button type="button" className={mode === 'work' && durationMinutes === 50 ? 'active' : ''} onClick={() => resetSprint('work', 50)}>50 min deep</button>
+            <button type="button" className={mode === 'short-break' ? 'active' : ''} onClick={() => resetSprint('short-break', 5)}>5 min break</button>
+          </div>
+        </div>
+        <div className="focus-timer-card" style={{ ['--focus-progress']: `${elapsedPct}%` } as CSSProperties}>
+          <span className="focus-timer-mode">{mode === 'work' ? 'Work sprint' : 'Short break'}</span>
+          <strong className="focus-timer-time" aria-live="polite">{minutes}:{seconds}</strong>
+          <p>{activeTarget ? `${activeTarget.kind}: ${activeTarget.label}` : 'Pick a task or idea to start.'}</p>
+          <div className="focus-timer-progress" aria-hidden="true"><span /></div>
+          <div className="focus-timer-actions">
+            <button type="button" className="btn btn-primary" disabled={!activeTarget} onClick={() => setIsRunning((running) => !running)}>{isRunning ? 'Pause' : 'Start'}</button>
+            <button type="button" className="btn btn-secondary" onClick={() => resetSprint(mode, durationMinutes)}>Reset</button>
+            {activeTask ? <button type="button" className="btn btn-ghost" onClick={() => void onMoveTask(activeTask.id, 'done')}>Complete task</button> : null}
+          </div>
+          <small>{completedSessions} sprint{completedSessions === 1 ? '' : 's'} completed this session</small>
+        </div>
+      </section>
       <div className="focus-grid" aria-label="Daily focus slots">
         {Array.from({ length: 5 }).map((_, index) => {
           const task = openTasks[index]
@@ -1820,6 +2194,7 @@ function CaptureModal({ destinationName, onClose, onSubmit }: { destinationName:
   const [title, setTitle] = useState('')
   const [isListening, setIsListening] = useState(false)
   const [enhanceWithAI, setEnhanceWithAI] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
 
@@ -1880,8 +2255,13 @@ function CaptureModal({ destinationName, onClose, onSubmit }: { destinationName:
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
-    if (!title.trim()) return
-    await onSubmit({ title: title.trim(), enhanceWithAI })
+    if (!title.trim() || submitting) return
+    setSubmitting(true)
+    try {
+      await onSubmit({ title: title.trim(), enhanceWithAI })
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -1926,7 +2306,7 @@ function CaptureModal({ destinationName, onClose, onSubmit }: { destinationName:
             Enhance with AI
           </label>
           <div className="modal-actions">
-            <button className="btn btn-primary" type="submit">Save locally</button>
+            <button className="btn btn-primary" type="submit" disabled={submitting}>Save locally</button>
           </div>
         </div>
       </form>
@@ -2628,7 +3008,7 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
 
           <section className="settings-panel" aria-labelledby="workspace-settings-title">
             <h4 id="workspace-settings-title">Workspace switcher</h4>
-            <p className="settings-muted">Personal is private by default. Team mode is visible but disabled until Supabase Auth, workspace scoping, and RLS tests exist.</p>
+            <p className="settings-muted">Personal is private by default. Teams are disabled in local/self-hosted builds and reserved for the future hosted product.</p>
             <div className="segmented-control segmented-control--wide" role="group" aria-label="Workspace mode">
               <button type="button" className={workspaceMode === 'personal' ? 'active' : ''} onClick={() => onWorkspaceModeChange('personal')}>Personal</button>
               <button type="button" disabled title={workspaceModes['team-preview'].description}>Team</button>
@@ -2734,6 +3114,7 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
             authStatus={authStatus}
             connectionTestCost={preview.estimatedCreditCost}
           />
+          <BillingSettingsPanel activeWorkspace={activeWorkspace} authStatus={authStatus} />
           <AuditLogPanel
             activeWorkspace={activeWorkspace}
             supabaseEnv={supabaseEnv}
@@ -2765,6 +3146,7 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
             activeWorkspace={activeWorkspace}
             supabaseEnv={supabaseEnv}
             authStatus={authStatus}
+            teamFeaturesEnabled={ENABLE_TEAM_WORKSPACES}
           />
 
           <section className="settings-panel settings-panel--wide" aria-labelledby="preview-settings-title">
@@ -2904,10 +3286,74 @@ function CreditsUsagePanel({ supabaseEnv, authStatus, connectionTestCost }: {
   )
 }
 
-function TeamSettingsPanel({ activeWorkspace, supabaseEnv, authStatus }: {
+function BillingSettingsPanel({ activeWorkspace, authStatus }: { activeWorkspace: ActiveWorkspace; authStatus: AuthStatus }) {
+  const billingEnv = useMemo(() => getBillingEnv(), [])
+  const { status, error, loading } = useSubscriptionStatus(activeWorkspace.id, authStatus)
+  const [pricingOpen, setPricingOpen] = useState(false)
+  const [busyPlanId, setBusyPlanId] = useState<string | null>(null)
+  const [actionError, setActionError] = useState('')
+  const canUseBilling = billingEnv.configured && authStatus.mode === 'signed-in'
+
+  async function startCheckout(planId: string) {
+    setBusyPlanId(planId)
+    setActionError('')
+    const result = await createCheckoutSession(activeWorkspace.id, planId)
+    setBusyPlanId(null)
+    if (result.ok) {
+      window.location.assign(result.data.url)
+      return
+    }
+    setActionError(result.error)
+  }
+
+  async function openPortal() {
+    setActionError('')
+    const result = await createBillingPortalSession(activeWorkspace.id)
+    if (result.ok) {
+      window.location.assign(result.data.url)
+      return
+    }
+    setActionError(result.error)
+  }
+
+  return (
+    <section className="settings-panel" aria-labelledby="billing-settings-title">
+      <h4 id="billing-settings-title">Hosted billing</h4>
+      {!billingEnv.configured ? (
+        <p className="settings-muted">Billing wrapper not configured. The MIT app stays fully usable without Stripe. Add VITE_BILLING_URL in a private hosted deployment to enable plans.</p>
+      ) : authStatus.mode !== 'signed-in' ? (
+        <p className="settings-muted">Sign in to check hosted plan status.</p>
+      ) : (
+        <>
+          <div className="settings-row"><span>Billing service</span><strong>{billingEnv.host}</strong></div>
+          <div className="settings-row"><span>Current plan</span><strong>{loading ? 'Checking…' : status.planName}</strong></div>
+          <div className="settings-row"><span>Status</span><strong>{status.status}</strong></div>
+          {status.periodEnd ? <div className="settings-row"><span>Period ends</span><strong>{new Date(status.periodEnd).toLocaleDateString()}</strong></div> : null}
+          <div className="settings-actions">
+            <button type="button" className="btn btn-primary" disabled={!canUseBilling} onClick={() => setPricingOpen(true)}>Upgrade</button>
+            <button type="button" className="btn btn-secondary" disabled={!canUseBilling} onClick={() => void openPortal()}>Manage billing</button>
+          </div>
+        </>
+      )}
+      {error || actionError ? <p className="settings-status settings-status--error">{error || actionError}</p> : null}
+      {pricingOpen ? (
+        <PricingModal
+          plans={status.plans}
+          busyPlanId={busyPlanId}
+          error={actionError}
+          onClose={() => setPricingOpen(false)}
+          onSelectPlan={startCheckout}
+        />
+      ) : null}
+    </section>
+  )
+}
+
+function TeamSettingsPanel({ activeWorkspace, supabaseEnv, authStatus, teamFeaturesEnabled }: {
   activeWorkspace: ActiveWorkspace
   supabaseEnv: ResolvedSupabaseEnv
   authStatus: AuthStatus
+  teamFeaturesEnabled: boolean
 }) {
   const [members, setMembers] = useState<WorkspaceMember[]>([])
   const [invites, setInvites] = useState<WorkspaceInvite[]>([])
@@ -2917,7 +3363,7 @@ function TeamSettingsPanel({ activeWorkspace, supabaseEnv, authStatus }: {
   const [statusTone, setStatusTone] = useState<'info' | 'success' | 'error'>('info')
   const [isBusy, setIsBusy] = useState(false)
 
-  const canLoad = supabaseEnv.configured && authStatus.mode === 'signed-in' && activeWorkspace.type === 'team'
+  const canLoad = teamFeaturesEnabled && supabaseEnv.configured && authStatus.mode === 'signed-in' && activeWorkspace.type === 'team'
 
   useEffect(() => {
     if (!canLoad) return
@@ -2985,8 +3431,10 @@ function TeamSettingsPanel({ activeWorkspace, supabaseEnv, authStatus }: {
   return (
     <section className="settings-panel" aria-labelledby="team-settings-title">
       <h4 id="team-settings-title">Team settings</h4>
-      {!supabaseEnv.configured ? (
-        <p className="settings-muted">Team features require Supabase. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then sign in.</p>
+      {!teamFeaturesEnabled ? (
+        <p className="settings-muted">Teams are disabled in the local app. They will belong to the future hosted OpenNapse plan, where shared workspaces, invites, billing, and RLS-backed sync can be managed safely.</p>
+      ) : !supabaseEnv.configured ? (
+        <p className="settings-muted">Team features require the hosted Supabase path. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then sign in.</p>
       ) : authStatus.mode !== 'signed-in' ? (
         <p className="settings-muted">Sign in to manage team workspaces.</p>
       ) : activeWorkspace.type !== 'team' ? (
@@ -3051,7 +3499,8 @@ function TeamSettingsPanel({ activeWorkspace, supabaseEnv, authStatus }: {
   )
 }
 
-function CreateWorkspaceModal({ onCreate, onClose }: {
+function CreateWorkspaceModal({ allowTeamWorkspaces, onCreate, onClose }: {
+  allowTeamWorkspaces: boolean
   onCreate: (name: string, type: 'personal' | 'team') => Promise<void>
   onClose: () => void
 }) {
@@ -3066,7 +3515,7 @@ function CreateWorkspaceModal({ onCreate, onClose }: {
     if (!trimmed || isBusy) return
     setIsBusy(true)
     try {
-      await onCreate(trimmed, type)
+      await onCreate(trimmed, allowTeamWorkspaces ? type : 'personal')
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -3086,7 +3535,7 @@ function CreateWorkspaceModal({ onCreate, onClose }: {
         </div>
         <form className="settings-panel" onSubmit={handleSubmit}>
           <p className="settings-muted">
-            Each workspace is its own container for ideas, projects, tasks, and notes. Personal workspaces stay private to you; team workspaces are shared once Supabase auth is signed in.
+            Each workspace is its own container for ideas, projects, tasks, and notes. Local workspaces are personal-only; team workspaces are reserved for the future hosted version.
           </p>
           <label className="settings-field">
             <span>Name</span>
@@ -3104,9 +3553,10 @@ function CreateWorkspaceModal({ onCreate, onClose }: {
             <span>Type</span>
             <div className="segmented-control" role="group" aria-label="Workspace type">
               <button type="button" className={type === 'personal' ? 'active' : ''} onClick={() => setType('personal')} disabled={isBusy}>Personal</button>
-              <button type="button" className={type === 'team' ? 'active' : ''} onClick={() => setType('team')} disabled={isBusy}>Team</button>
+              <button type="button" className={type === 'team' ? 'active' : ''} onClick={() => setType('team')} disabled={isBusy || !allowTeamWorkspaces} title={allowTeamWorkspaces ? 'Create a shared workspace' : 'Teams are disabled locally and reserved for hosted OpenNapse.'}>Team</button>
             </div>
           </div>
+          {!allowTeamWorkspaces ? <p className="settings-muted">Team workspaces are intentionally disabled here. Use personal workspaces locally; hosted teams come later.</p> : null}
           <div className="settings-actions">
             <button type="submit" className="btn btn-primary" disabled={isBusy || trimmed.length === 0}>
               {isBusy ? 'Creating…' : 'Create workspace'}
@@ -3269,4 +3719,3 @@ function SignInModal({ supabaseEnv, authStatus, workspaceBootstrap, onClose }: {
 }
 
 export default App
-
