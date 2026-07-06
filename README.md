@@ -173,7 +173,7 @@ docker/            Self-host scaffolding
 | `pnpm typecheck` | TypeScript project check |
 | `pnpm lint` | ESLint |
 | `pnpm test` | Vitest in watch mode |
-| `pnpm test:run` | Vitest one-shot (48 tests) |
+| `pnpm test:run` | Vitest one-shot |
 | `pnpm --filter @opennapse/web electron:dev` | Electron dev mode |
 | `pnpm --filter @opennapse/web electron:build` | Package desktop installer |
 | `pnpm --filter @opennapse/web exec playwright test` | E2E tests |
