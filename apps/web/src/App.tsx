@@ -632,7 +632,7 @@ function App() {
             <FocusView ideas={activeIdeas} tasks={tasks} selectedProjectId={selectedProjectId} onMoveTask={moveTask} />
           )}
           {activeView === 'stats' && (
-            <StatsView ideas={ideas} projects={projects} tasks={tasks} notes={notes} exportData={exportData} importData={importData} reload={async () => { await loadIdeas(); await loadWorkspace() }} onLoadDemoData={async () => { await importData(JSON.stringify(dummyData)); await loadIdeas(); await loadWorkspace() }} />
+            <StatsView ideas={ideas} projects={projects} tasks={tasks} notes={notes} exportData={exportData} importData={importData} reload={async () => { await loadIdeas(); await loadWorkspace() }} onLoadDemoData={async () => { await importData(JSON.stringify(dummyData)); await loadIdeas(); await loadWorkspace() }} onClearAllData={async () => { await clearIdeas(); await clearWorkspace(); await loadIdeas(); await loadWorkspace() }} />
           )}
           {SHOW_LOCAL_AI_SUGGESTIONS ? <AISuggestions ideas={ideas} projects={projects} tasks={tasks} /> : null}
         </main>
@@ -2120,7 +2120,7 @@ function FocusView({ ideas, tasks, selectedProjectId, onMoveTask }: { ideas: Ide
   )
 }
 
-function StatsView({ ideas, projects, tasks, notes, exportData, importData, reload, onLoadDemoData }: { ideas: Idea[]; projects: Project[]; tasks: Task[]; notes: Note[]; exportData: () => Promise<string>; importData: (payload: string) => Promise<void>; reload: () => Promise<void>; onLoadDemoData: () => Promise<void> }) {
+function StatsView({ ideas, projects, tasks, notes, exportData, importData, reload, onLoadDemoData, onClearAllData }: { ideas: Idea[]; projects: Project[]; tasks: Task[]; notes: Note[]; exportData: () => Promise<string>; importData: (payload: string) => Promise<void>; reload: () => Promise<void>; onLoadDemoData: () => Promise<void>; onClearAllData: () => Promise<void> }) {
   const stats = calculateStats(ideas, projects, tasks)
   const [backup, setBackup] = useState('')
   const [demoMessage, setDemoMessage] = useState('')
@@ -2149,6 +2149,7 @@ function StatsView({ ideas, projects, tasks, notes, exportData, importData, relo
           <button className="btn btn-primary" type="button" onClick={() => void exportData().then(setBackup)}>Generate export</button>
           <button className="btn btn-secondary" type="button" onClick={() => { if (window.confirm('Import all data? This replaces every idea, project, task, and note with the content in the textarea above. This cannot be undone.')) void importData(backup).then(reload) }}>Import from text</button>
           <button className="btn btn-secondary" type="button" onClick={() => { if (window.confirm('Load demo data? This replaces all your existing ideas, projects, tasks, and notes with sample data. This cannot be undone.')) void onLoadDemoData().then(() => { setDemoMessage('Demo data loaded.'); reload() }).catch((err: unknown) => setDemoMessage(`Failed: ${err instanceof Error ? err.message : String(err)}`)) }}>Load demo data</button>
+          <button className="btn btn-ghost" type="button" onClick={() => { if (window.confirm('Factory reset? This permanently deletes ALL your ideas, projects, tasks, and notes. This cannot be undone.')) void onClearAllData().then(() => { setDemoMessage('Factory reset complete.') }) }}>Factory reset</button>
         </div>
         {demoMessage ? <p className="settings-status">{demoMessage}</p> : null}
         <textarea aria-label="Backup JSON" value={backup} onChange={(event) => setBackup(event.target.value)} placeholder="Generated backup JSON appears here. Paste backup JSON here to import." />
@@ -2821,6 +2822,9 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
       }) ?? buildOllamaCloudPreview('connection-test')
     )
   }, [activeProviderId, activeModelId, activeBaseUrlOverride])
+  const billingEnv = useMemo(() => getBillingEnv(), [])
+  const isHosted = billingEnv.configured
+  const [settingsTab, setSettingsTab] = useState<'account' | 'ai' | 'data' | 'billing' | 'advanced'>('account')
   const statusToShow = statusMessage
   const canRequestMagicLink = supabaseEnv.configured && authStatus.mode !== 'loading' && authStatus.mode !== 'signed-in' && authEmail.trim().length > 0
   const canSignOut = supabaseEnv.configured && authStatus.mode === 'signed-in'
@@ -2949,222 +2953,268 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
           <button type="button" className="btn btn-ghost" onClick={onClose}>Close</button>
         </div>
 
-        <div className="settings-grid">
-          <section className="settings-panel" aria-labelledby="profile-settings-title">
-            <h4 id="profile-settings-title">Profile</h4>
-            <p className="settings-muted">{supabaseEnv.configured ? 'Supabase project binding is configured. Auth screens, magic links, and MFA are still gated behind the workspace and RLS phases.' : supabaseEnv.message}</p>
-            <div className="settings-row"><span>Session</span><strong>{authStatus.mode === 'signed-in' ? authStatus.email ?? 'Signed in' : 'Local only'}</strong></div>
-            <div className="settings-row"><span>Cloud auth</span><strong>{supabaseEnv.configured ? authStatus.label : 'Supabase not configured'}</strong></div>
-            <div className="settings-row"><span>Workspace bootstrap</span><strong>{workspaceBootstrap.label}</strong></div>
-            <div className="settings-row"><span>Supabase project</span><strong>{supabaseEnv.projectHost ?? 'Add VITE_SUPABASE_* env vars'}</strong></div>
-            <p className="settings-muted">{authStatus.description}</p>
-            <p className="settings-muted">{workspaceBootstrap.description}</p>
-            <label className="settings-field">
-              <span>Email for magic link</span>
-              <input
-                type="email"
-                value={authEmail}
-                onChange={(event) => setAuthEmail(event.target.value)}
-                placeholder={DEV_ADMIN_EMAIL}
-                disabled={!supabaseEnv.configured || authStatus.mode === 'signed-in'}
-              />
-            </label>
-            <p className="settings-muted">Dev admin email is prefilled for local staging. No real admin account is created here.</p>
-            <div className="settings-actions">
-              <button
-                type="button"
-                className="btn btn-secondary"
-                disabled={!canRequestMagicLink}
-                onClick={async () => {
-                  const result = await requestMagicLink(authEmail)
-                  setAuthActionMessage(result.message)
-                }}
-              >Send magic link</button>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                disabled={!canSignOut}
-                onClick={async () => {
-                  const result = await signOutOfSupabase()
-                  setAuthActionMessage(result.message)
-                }}
-              >Sign out</button>
-            </div>
-            {authActionMessage ? <p className="settings-status">{authActionMessage}</p> : null}
-          </section>
-
-          <section className="settings-panel" aria-labelledby="appearance-settings-title">
-            <h4 id="appearance-settings-title">Appearance</h4>
-            <div className="settings-row">
-              <span>Theme</span>
-              <div className="segmented-control" role="group" aria-label="Theme">
-                <button type="button" className={theme === 'light' ? 'active' : ''} onClick={() => onThemeChange('light')}>Light</button>
-                <button type="button" className={theme === 'dark' ? 'active' : ''} onClick={() => onThemeChange('dark')}>Dark</button>
-              </div>
-            </div>
-            <div className="settings-row"><span>Motion</span><strong>Respects OS reduced motion</strong></div>
-            <div className="settings-row"><span>Text scale</span><strong>Comfort 15px base</strong></div>
-          </section>
-
-          <section className="settings-panel" aria-labelledby="workspace-settings-title">
-            <h4 id="workspace-settings-title">Workspace switcher</h4>
-            <p className="settings-muted">Personal is private by default. Teams are disabled in local/self-hosted builds and reserved for the future hosted product.</p>
-            <div className="segmented-control segmented-control--wide" role="group" aria-label="Workspace mode">
-              <button type="button" className={workspaceMode === 'personal' ? 'active' : ''} onClick={() => onWorkspaceModeChange('personal')}>Personal</button>
-              <button type="button" disabled title={workspaceModes['team-preview'].description}>Team</button>
-            </div>
-            <div className="settings-row"><span>Active workspace</span><strong>{activeWorkspace.name}</strong></div>
-            <div className="settings-row"><span>Workspace ID</span><strong>{activeWorkspace.id}</strong></div>
-            <p className="settings-muted">{activeWorkspace.description}</p>
-          </section>
-
-          <section className="settings-panel" aria-labelledby="ai-settings-title">
-            <h4 id="ai-settings-title">AI providers</h4>
-            <label className="settings-field">
-              <span>Provider</span>
-              <select value={activeProviderId} onChange={(event) => updateProvider(event.target.value as AISettings['activeProviderId'])}>
-                {Object.values(AI_PROVIDERS).map((provider) => (
-                  <option key={provider.id} value={provider.id}>{provider.label}</option>
-                ))}
-              </select>
-            </label>
-            {!isHostedActive ? (
-              <p className="settings-muted">Local rules run on-device. No configuration needed.</p>
-            ) : (
-              <>
-                <label className="settings-field">
-                  <span>{sessionKeyLabel}</span>
-                  <div className="settings-key-row">
-                    <input
-                      type={keyVisible ? 'text' : 'password'}
-                      autoComplete="new-password"
-                      value={sessionKey}
-                      onChange={(event) => onSessionKeyChange(activeProviderId, event.target.value)}
-                      placeholder="Paste your API key"
-                    />
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      onClick={() => setKeyVisible(!keyVisible)}
-                      aria-label={keyVisible ? 'Hide key' : 'Show key'}
-                    >
-                      {keyVisible ? 'Hide' : 'Show'}
-                    </button>
-                  </div>
-                </label>
-                <p className="settings-muted">Key stays in memory for this session only. Clears on reload.</p>
-
-                {activeProviderDef.editableBaseUrl ? (
-                  <label className="settings-field">
-                    <span>Base URL (optional)</span>
-                    <input
-                      type="url"
-                      value={activeBaseUrlOverride ?? ''}
-                      onChange={(event) => updateHostedBaseUrl(event.target.value)}
-                      placeholder={activeProviderDef.endpoint?.defaultBaseUrl ?? ''}
-                      autoComplete="off"
-                    />
-                  </label>
+        <div className="settings-tabs">
+          <button type="button" className={settingsTab === 'account' ? 'active' : ''} onClick={() => setSettingsTab('account')}>Account</button>
+          <button type="button" className={settingsTab === 'ai' ? 'active' : ''} onClick={() => setSettingsTab('ai')}>AI</button>
+          <button type="button" className={settingsTab === 'data' ? 'active' : ''} onClick={() => setSettingsTab('data')}>Data</button>
+          {isHosted ? (
+            <button type="button" className={settingsTab === 'billing' ? 'active' : ''} onClick={() => setSettingsTab('billing')}>Billing</button>
+          ) : (
+            <button type="button" className={settingsTab === 'advanced' ? 'active' : ''} onClick={() => setSettingsTab('advanced')}>Advanced</button>
+          )}
+        </div>
+        <div className="settings-tab-content">
+          {settingsTab === 'account' && (
+            <div className="settings-grid">
+              <section className="settings-panel" aria-labelledby="profile-settings-title">
+                <h4 id="profile-settings-title">Profile</h4>
+                {!isHosted ? (
+                  <p className="settings-muted">{supabaseEnv.configured ? 'Supabase project binding is configured.' : supabaseEnv.message}</p>
                 ) : null}
-
-                <div className="settings-test-area">
+                <div className="settings-row"><span>Session</span><strong>{authStatus.mode === 'signed-in' ? authStatus.email ?? 'Signed in' : 'Local only'}</strong></div>
+                {!isHosted ? (
+                  <>
+                    <div className="settings-row"><span>Cloud auth</span><strong>{supabaseEnv.configured ? authStatus.label : 'Supabase not configured'}</strong></div>
+                    <div className="settings-row"><span>Workspace bootstrap</span><strong>{workspaceBootstrap.label}</strong></div>
+                    <div className="settings-row"><span>Supabase project</span><strong>{supabaseEnv.projectHost ?? 'Add VITE_SUPABASE_* env vars'}</strong></div>
+                    <p className="settings-muted">{authStatus.description}</p>
+                    <p className="settings-muted">{workspaceBootstrap.description}</p>
+                  </>
+                ) : null}
+                <label className="settings-field">
+                  <span>Email for magic link</span>
+                  <input
+                    type="email"
+                    value={authEmail}
+                    onChange={(event) => setAuthEmail(event.target.value)}
+                    placeholder={isHosted ? 'you@example.com' : DEV_ADMIN_EMAIL}
+                    disabled={!supabaseEnv.configured || authStatus.mode === 'signed-in'}
+                  />
+                </label>
+                {!isHosted ? (
+                  <p className="settings-muted">Dev admin email is prefilled for local staging. No real admin account is created here.</p>
+                ) : null}
+                <div className="settings-actions">
                   <button
                     type="button"
                     className="btn btn-secondary"
-                    disabled={!sessionKey.trim() || isTesting}
-                    onClick={handleTestConnection}
-                  >
-                    {isTesting ? 'Testing\u2026' : 'Test connection'}
-                  </button>
-                  {connectionResult ? (
-                    <span className={`settings-test-badge ${connectionResult.ok ? 'ok' : 'err'}`}>
-                      {connectionResult.ok ? `\u2713 Connected to ${activeProviderDef.label}` : `\u2717 ${connectionResult.message}`}
-                    </span>
-                  ) : null}
-                  {modelsLoading ? <span className="settings-muted" style={{ marginLeft: 8 }}>Loading models\u2026</span> : null}
+                    disabled={!canRequestMagicLink}
+                    onClick={async () => {
+                      const result = await requestMagicLink(authEmail)
+                      setAuthActionMessage(result.message)
+                    }}
+                  >Send magic link</button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    disabled={!canSignOut}
+                    onClick={async () => {
+                      const result = await signOutOfSupabase()
+                      setAuthActionMessage(result.message)
+                    }}
+                  >Sign out</button>
                 </div>
+                {authActionMessage ? <p className="settings-status">{authActionMessage}</p> : null}
+              </section>
 
+              <section className="settings-panel" aria-labelledby="appearance-settings-title">
+                <h4 id="appearance-settings-title">Appearance</h4>
+                <div className="settings-row">
+                  <span>Theme</span>
+                  <div className="segmented-control" role="group" aria-label="Theme">
+                    <button type="button" className={theme === 'light' ? 'active' : ''} onClick={() => onThemeChange('light')}>Light</button>
+                    <button type="button" className={theme === 'dark' ? 'active' : ''} onClick={() => onThemeChange('dark')}>Dark</button>
+                  </div>
+                </div>
+                <div className="settings-row"><span>Motion</span><strong>Respects OS reduced motion</strong></div>
+                <div className="settings-row"><span>Text scale</span><strong>Comfort 15px base</strong></div>
+              </section>
+
+              <section className="settings-panel" aria-labelledby="security-settings-title">
+                <h4 id="security-settings-title">Privacy and security</h4>
+                <ul className="settings-list">
+                  <li>No telemetry by default.</li>
+                  <li>Hosted API keys are session-only and never saved to localStorage.</li>
+                  <li>Hosted requests require consent and exact preview acceptance.</li>
+                </ul>
+              </section>
+            </div>
+          )}
+
+          {settingsTab === 'ai' && (
+            <div className="settings-grid">
+              <section className="settings-panel" aria-labelledby="ai-settings-title">
+                <h4 id="ai-settings-title">AI providers</h4>
                 <label className="settings-field">
-                  <span>Model</span>
-                  <select
-                    value={activeModelId}
-                    onChange={(event) => { if (isGenericHostedActive) updateHostedModel(event.target.value) }}
-                    disabled={modelsLoading}
-                  >
-                    {modelOptions.map((model) => (
-                      <option key={model.id} value={model.id}>{model.label}</option>
+                  <span>Provider</span>
+                  <select value={activeProviderId} onChange={(event) => updateProvider(event.target.value as AISettings['activeProviderId'])}>
+                    {Object.values(AI_PROVIDERS).map((provider) => (
+                      <option key={provider.id} value={provider.id}>{provider.label}</option>
                     ))}
                   </select>
                 </label>
-                {showCuratedFallbackHint ? (
-                  <p className="settings-muted">Live model listing unavailable. Showing curated models.</p>
+                {!isHostedActive ? (
+                  <p className="settings-muted">Local rules run on-device. No configuration needed.</p>
+                ) : (
+                  <>
+                    <label className="settings-field">
+                      <span>{sessionKeyLabel}</span>
+                      <div className="settings-key-row">
+                        <input
+                          type={keyVisible ? 'text' : 'password'}
+                          autoComplete="new-password"
+                          value={sessionKey}
+                          onChange={(event) => onSessionKeyChange(activeProviderId, event.target.value)}
+                          placeholder="Paste your API key"
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          onClick={() => setKeyVisible(!keyVisible)}
+                          aria-label={keyVisible ? 'Hide key' : 'Show key'}
+                        >
+                          {keyVisible ? 'Hide' : 'Show'}
+                        </button>
+                      </div>
+                    </label>
+                    <p className="settings-muted">Key stays in memory for this session only. Clears on reload.</p>
+
+                    {activeProviderDef.editableBaseUrl ? (
+                      <label className="settings-field">
+                        <span>Base URL (optional)</span>
+                        <input
+                          type="url"
+                          value={activeBaseUrlOverride ?? ''}
+                          onChange={(event) => updateHostedBaseUrl(event.target.value)}
+                          placeholder={activeProviderDef.endpoint?.defaultBaseUrl ?? ''}
+                          autoComplete="off"
+                        />
+                      </label>
+                    ) : null}
+
+                    <div className="settings-test-area">
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        disabled={!sessionKey.trim() || isTesting}
+                        onClick={handleTestConnection}
+                      >
+                        {isTesting ? 'Testing\u2026' : 'Test connection'}
+                      </button>
+                      {connectionResult ? (
+                        <span className={`settings-test-badge ${connectionResult.ok ? 'ok' : 'err'}`}>
+                          {connectionResult.ok ? `\u2713 Connected to ${activeProviderDef.label}` : `\u2717 ${connectionResult.message}`}
+                        </span>
+                      ) : null}
+                      {modelsLoading ? <span className="settings-muted" style={{ marginLeft: 8 }}>Loading models\u2026</span> : null}
+                    </div>
+
+                    <label className="settings-field">
+                      <span>Model</span>
+                      <select
+                        value={activeModelId}
+                        onChange={(event) => { if (isGenericHostedActive) updateHostedModel(event.target.value) }}
+                        disabled={modelsLoading}
+                      >
+                        {modelOptions.map((model) => (
+                          <option key={model.id} value={model.id}>{model.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    {showCuratedFallbackHint ? (
+                      <p className="settings-muted">Live model listing unavailable. Showing curated models.</p>
+                    ) : null}
+
+                    <label className="settings-check">
+                      <input type="checkbox" checked={consentAccepted} onChange={(event) => updateHostedConsent(event.target.checked)} />
+                      <span>{consentHelp}</span>
+                    </label>
+                  </>
+                )}
+                <p className="settings-muted">{isOllamaActive ? 'Selecting a provider enables it for AI features. Consent + preview acceptance required before sending data.' : 'Selecting a provider enables it for AI features. Consent + preview acceptance required before sending data.'}</p>
+              </section>
+
+              <CreditsUsagePanel
+                supabaseEnv={supabaseEnv}
+                authStatus={authStatus}
+                connectionTestCost={preview.estimatedCreditCost}
+              />
+
+              <section className="settings-panel settings-panel--wide" aria-labelledby="preview-settings-title">
+                <h4 id="preview-settings-title">Request preview</h4>
+                <p className="settings-muted">Before using AI features, review what would be sent. API keys are never persisted or included in previews. Estimated cost: {preview.estimatedCreditCost} credits.</p>
+                <pre className="request-preview">{JSON.stringify(preview, null, 2)}</pre>
+                <div className="settings-actions">
+                  <button type="button" className={`btn ${acceptedPreviewHash === preview.payloadHash ? 'btn-secondary' : 'btn-primary'}`} onClick={() => {
+                    onAcceptPreview(preview.payloadHash)
+                    const nextGate = canRunHostedAI({ settings: aiSettings, sessionApiKey: sessionKey, acceptedPreviewHash: preview.payloadHash, preview })
+                    setStatusMessage(nextGate.ok ? 'Preview accepted. You can now use AI features with this provider.' : ('reason' in nextGate ? nextGate.reason : ''))
+                  }}>
+                    {acceptedPreviewHash === preview.payloadHash ? '\u2713 Preview accepted' : 'Accept preview'}
+                  </button>
+                </div>
+                {statusToShow ? <p className="settings-status">{statusToShow}</p> : null}
+                {settingsSavedAt ? <p className="settings-muted">Saved {new Date(settingsSavedAt).toLocaleTimeString()}</p> : null}
+              </section>
+            </div>
+          )}
+
+          {settingsTab === 'data' && (
+            <div className="settings-grid">
+              <section className="settings-panel" aria-labelledby="workspace-settings-title">
+                <h4 id="workspace-settings-title">Workspace</h4>
+                <p className="settings-muted">Personal is private by default. Teams are disabled in local/self-hosted builds and reserved for the future hosted product.</p>
+                <div className="segmented-control segmented-control--wide" role="group" aria-label="Workspace mode">
+                  <button type="button" className={workspaceMode === 'personal' ? 'active' : ''} onClick={() => onWorkspaceModeChange('personal')}>Personal</button>
+                  <button type="button" disabled title={workspaceModes['team-preview'].description}>Team</button>
+                </div>
+                <div className="settings-row"><span>Active workspace</span><strong>{activeWorkspace.name}</strong></div>
+                {!isHosted ? (
+                  <div className="settings-row"><span>Workspace ID</span><strong>{activeWorkspace.id}</strong></div>
                 ) : null}
+                <p className="settings-muted">{activeWorkspace.description}</p>
+              </section>
 
-                <label className="settings-check">
-                  <input type="checkbox" checked={consentAccepted} onChange={(event) => updateHostedConsent(event.target.checked)} />
-                  <span>{consentHelp}</span>
-                </label>
-              </>
-            )}
-            <p className="settings-muted">{isOllamaActive ? 'Selecting a provider enables it for AI features. Consent + preview acceptance required before sending data.' : 'Selecting a provider enables it for AI features. Consent + preview acceptance required before sending data.'}</p>
-          </section>
-
-          <CreditsUsagePanel
-            supabaseEnv={supabaseEnv}
-            authStatus={authStatus}
-            connectionTestCost={preview.estimatedCreditCost}
-          />
-          <BillingSettingsPanel activeWorkspace={activeWorkspace} authStatus={authStatus} />
-          <AuditLogPanel
-            activeWorkspace={activeWorkspace}
-            supabaseEnv={supabaseEnv}
-            authStatus={authStatus}
-          />
-
-          <section className="settings-panel" aria-labelledby="security-settings-title">
-            <h4 id="security-settings-title">Privacy and security</h4>
-            <ul className="settings-list">
-              <li>No telemetry by default.</li>
-              <li>Hosted API keys are session-only and never saved to localStorage.</li>
-              <li>Hosted requests require consent and exact preview acceptance.</li>
-            </ul>
-            <div className="settings-actions" style={{ marginTop: 12 }}>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={async () => {
-                  if (!confirm('This will permanently delete all local ideas, projects, tasks, and notes. Continue?')) return
-                  await onClearData()
-                  setClearDataMessage('All local data cleared.')
-                }}
-              >Clear all local data</button>
+              <section className="settings-panel" aria-labelledby="factory-reset-title">
+                <h4 id="factory-reset-title">Factory reset</h4>
+                <p className="settings-muted">This permanently deletes all ideas, projects, tasks, and notes in the current workspace. Cannot be undone.</p>
+                <div className="settings-actions">
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={async () => {
+                      if (!confirm('Factory reset? This will permanently delete ALL ideas, projects, tasks, and notes. This cannot be undone. Continue?')) return
+                      await onClearData()
+                      setClearDataMessage('Factory reset complete.')
+                    }}
+                  >Factory reset</button>
+                </div>
+                {clearDataMessage ? <p className="settings-status">{clearDataMessage}</p> : null}
+              </section>
             </div>
-            {clearDataMessage ? <p className="settings-status">{clearDataMessage}</p> : null}
-          </section>
+          )}
 
-          <TeamSettingsPanel
-            activeWorkspace={activeWorkspace}
-            supabaseEnv={supabaseEnv}
-            authStatus={authStatus}
-            teamFeaturesEnabled={ENABLE_TEAM_WORKSPACES}
-          />
-
-          <section className="settings-panel settings-panel--wide" aria-labelledby="preview-settings-title">
-            <h4 id="preview-settings-title">Request preview</h4>
-            <p className="settings-muted">Before using AI features, review what would be sent. API keys are never persisted or included in previews. Estimated cost: {preview.estimatedCreditCost} credits.</p>
-            <pre className="request-preview">{JSON.stringify(preview, null, 2)}</pre>
-            <div className="settings-actions">
-              <button type="button" className={`btn ${acceptedPreviewHash === preview.payloadHash ? 'btn-secondary' : 'btn-primary'}`} onClick={() => {
-                onAcceptPreview(preview.payloadHash)
-                const nextGate = canRunHostedAI({ settings: aiSettings, sessionApiKey: sessionKey, acceptedPreviewHash: preview.payloadHash, preview })
-                setStatusMessage(nextGate.ok ? 'Preview accepted. You can now use AI features with this provider.' : ('reason' in nextGate ? nextGate.reason : ''))
-              }}>
-                {acceptedPreviewHash === preview.payloadHash ? '\u2713 Preview accepted' : 'Accept preview'}
-              </button>
+          {settingsTab === 'billing' && isHosted && (
+            <div className="settings-grid">
+              <BillingSettingsPanel activeWorkspace={activeWorkspace} authStatus={authStatus} />
             </div>
-            {statusToShow ? <p className="settings-status">{statusToShow}</p> : null}
-            {settingsSavedAt ? <p className="settings-muted">Saved {new Date(settingsSavedAt).toLocaleTimeString()}</p> : null}
-          </section>
+          )}
+
+          {settingsTab === 'advanced' && !isHosted && (
+            <div className="settings-grid">
+              <AuditLogPanel
+                activeWorkspace={activeWorkspace}
+                supabaseEnv={supabaseEnv}
+                authStatus={authStatus}
+              />
+              <TeamSettingsPanel
+                activeWorkspace={activeWorkspace}
+                supabaseEnv={supabaseEnv}
+                authStatus={authStatus}
+                teamFeaturesEnabled={ENABLE_TEAM_WORKSPACES}
+              />
+            </div>
+          )}
         </div>
       </div>
     </div>

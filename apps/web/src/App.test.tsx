@@ -399,6 +399,7 @@ describe('App shell', () => {
     render(<App />)
 
     await user.click(screen.getByRole('button', { name: /settings/i }))
+    await user.click(screen.getByRole('button', { name: /^ai$/i }))
     await user.selectOptions(screen.getByRole('combobox', { name: /^provider$/i }), 'ollama-cloud')
     await user.type(screen.getByLabelText(/ollama cloud api key/i), 'session-only-test-key')
     await user.click(screen.getByRole('button', { name: /test connection/i }))
@@ -420,10 +421,7 @@ describe('App shell', () => {
 
     expect(screen.getByRole('dialog', { name: /settings/i })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: /^Profile$/i })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: /Workspace switcher/i })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: /Credits and usage/i })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: /Privacy and security/i })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: /Team settings/i })).toBeInTheDocument()
     expect(screen.getAllByText(/Supabase not configured/i).length).toBeGreaterThan(0)
     expect(screen.getByText(/Add VITE_SUPABASE_\* env vars/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/email for magic link/i)).toBeDisabled()
@@ -432,6 +430,15 @@ describe('App shell', () => {
     expect(screen.getByRole('button', { name: /sign out/i })).toBeDisabled()
     expect(screen.getByText(/Dev admin email is prefilled/i)).toBeInTheDocument()
     expect(screen.getByText(/Bootstrap waiting/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /^data$/i }))
+    expect(screen.getByRole('heading', { name: /Workspace/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /^ai$/i }))
+    expect(screen.getByRole('heading', { name: /Credits and usage/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /^advanced$/i }))
+    expect(screen.getByRole('heading', { name: /Team settings/i })).toBeInTheDocument()
   })
 
   it('moves Kanban cards with keyboard controls', async () => {
