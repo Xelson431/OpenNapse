@@ -12,6 +12,7 @@ import { createBillingPortalSession, createCheckoutSession, useSubscriptionStatu
 import { listAuditLog, type AuditEntry } from './auth/audit'
 import { Icon, type IconName } from './components/Icon'
 import { PricingModal } from './components/PricingModal'
+import { fetchProfile, updateDisplayName } from './auth/profile'
 import { getBillingEnv, getSupabaseEnv, type ResolvedSupabaseEnv } from './config/env'
 import { enhanceIdeaTitle, generateLocalAISuggestions } from './domain/ai'
 import { generateMentorReply, type MentorContext } from './domain/mentor'
@@ -27,7 +28,7 @@ import { useSyncStatus } from './sync/use-sync'
 import { useIdeasStore } from './stores/use-ideas-store'
 import { toPromoteInput, useWorkspaceStore } from './stores/use-workspace-store'
 import { useWorkspacesStore } from './stores/use-workspaces-store'
-import { setDb } from './db/get-db'
+import { getDb, setDb } from './db/get-db'
 import { createSupabaseCloudAdapter } from './db/supabase-cloud-adapter'
 import { BrowserLocalAdapter } from './db/browser-local-adapter'
 
@@ -211,50 +212,46 @@ function App() {
   }, [activeWorkspaceRecord, setActiveWorkspace])
 
   const activeUserIdRef = useRef<string | null>(null)
+  const [didAutoMigrate, setDidAutoMigrate] = useState(false)
   useEffect(() => {
     void (async () => {
       if (authStatus.mode === 'signed-in' && authStatus.userId && workspaceBootstrap?.mode === 'ready' && workspaceBootstrap.workspaceId) {
-        if (activeUserIdRef.current === authStatus.userId) return
-        activeUserIdRef.current = authStatus.userId
-        const localAdapter = new BrowserLocalAdapter()
-        localAdapter.setActiveWorkspaceId(activeWorkspaceId)
-        const localPayload = await localAdapter.exportData()
-        const localCounts = countExportPayload(localPayload)
-        const cloudAdapter = createSupabaseCloudAdapter()
-        cloudAdapter.setActiveWorkspaceId(workspaceBootstrap.workspaceId)
-        const [cloudIdeas, cloudProjects, cloudTasks, cloudNotes] = await Promise.all([
-          cloudAdapter.listIdeas(),
-          cloudAdapter.listProjects(),
-          cloudAdapter.listTasks(),
-          cloudAdapter.listNotes(),
-        ])
-        setDb(cloudAdapter)
+        if (!didAutoMigrate && activeUserIdRef.current !== authStatus.userId) {
+          activeUserIdRef.current = authStatus.userId
+          const localAdapter = new BrowserLocalAdapter()
+          localAdapter.setActiveWorkspaceId(activeWorkspaceId)
+          const [localPayload, cloudIdeas, cloudProjects, cloudTasks, cloudNotes] = await Promise.all([
+            localAdapter.exportData(),
+            getDb().listIdeas(),
+            getDb().listProjects(),
+            getDb().listTasks(),
+            getDb().listNotes(),
+          ])
+          const localCounts = countExportPayload(localPayload)
+          const cloudEmpty = cloudIdeas.length + cloudProjects.length + cloudTasks.length + cloudNotes.length === 0
+          if (cloudEmpty && hasExportedContent(localCounts)) {
+            await getDb().importData(localPayload)
+          }
+          setDidAutoMigrate(true)
+        }
+
+        setDb(createSupabaseCloudAdapter())
+        getDb().setActiveWorkspaceId(workspaceBootstrap.workspaceId)
         await loadWorkspaces()
         await loadIdeas()
         await loadWorkspace()
-        const dismissedForUser = (() => {
-          try {
-            return localStorage.getItem(CLOUD_MIGRATION_DISMISSED_STORAGE_KEY) === authStatus.userId
-          } catch {
-            return false
-          }
-        })()
-        const cloudEmpty = cloudIdeas.length + cloudProjects.length + cloudTasks.length + cloudNotes.length === 0
-        if (!dismissedForUser && cloudEmpty && hasExportedContent(localCounts)) {
-          setCloudMigrationPrompt({ payload: localPayload, counts: localCounts })
-        }
         return
       }
       if (authStatus.mode === 'signed-out' || authStatus.mode === 'unavailable') {
         activeUserIdRef.current = null
-        setCloudMigrationPrompt(null)
+        setDidAutoMigrate(false)
         setDb(new BrowserLocalAdapter())
         await loadWorkspaces()
         await loadIdeas()
         await loadWorkspace()
       }
     })()
-  }, [authStatus, workspaceBootstrap, activeWorkspaceId, loadIdeas, loadWorkspace, loadWorkspaces])
+  }, [authStatus, workspaceBootstrap, activeWorkspaceId, loadIdeas, loadWorkspace, loadWorkspaces, didAutoMigrate])
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -526,7 +523,7 @@ function App() {
                 ))}
                 <option value="__create__">＋ Create workspace…</option>
               </select>
-              <small className="workspace-select-badge">{activeWorkspace.badge}</small>
+              <small className="workspace-select-badge">{authStatus.mode === 'signed-in' ? 'Cloud' : activeWorkspace.badge}</small>
             </div>
             <span className="sync-status-pill" title={sync.description}>
                {sync.label}
@@ -2789,10 +2786,31 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
   const [authActionMessage, setAuthActionMessage] = useState('')
   const [clearDataMessage, setClearDataMessage] = useState('')
   const [connectionResult, setConnectionResult] = useState<{ ok: boolean; message: string } | null>(null)
+  const [displayName, setDisplayName] = useState('')
+  const [displayNameSavedAt, setDisplayNameSavedAt] = useState<string | null>(null)
+  const [displayNameError, setDisplayNameError] = useState('')
   const [isTesting, setIsTesting] = useState(false)
   const [liveModels, setLiveModels] = useState<ListedModel[] | null>(null)
   const [modelsLoading, setModelsLoading] = useState(false)
   const [keyVisible, setKeyVisible] = useState(false)
+
+  useEffect(() => {
+    if (authStatus.mode !== 'signed-in') { setDisplayName(''); return }
+    void fetchProfile().then((profile) => {
+      if (profile) setDisplayName(profile.display_name)
+    })
+  }, [authStatus.mode])
+
+  async function saveDisplayName(name: string) {
+    setDisplayNameError('')
+    const result = await updateDisplayName(name)
+    if (result.ok) {
+      setDisplayNameSavedAt(new Date().toISOString())
+    } else {
+      setDisplayNameError(result.error)
+    }
+  }
+
   const activeProviderId = aiSettings.activeProviderId
   const activeProviderDef = AI_PROVIDERS[activeProviderId]
   const isHostedActive = activeProviderDef.hosted
@@ -2967,59 +2985,61 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
             <div className="settings-grid">
               <section className="settings-panel" aria-labelledby="profile-settings-title">
                 <h4 id="profile-settings-title">Profile</h4>
-                {!isHosted ? (
-                  <p className="settings-muted">{supabaseEnv.configured ? 'Supabase project binding is configured.' : supabaseEnv.message}</p>
-                ) : null}
-                <div className="settings-row"><span>Session</span><strong>{authStatus.mode === 'signed-in' ? authStatus.email ?? 'Signed in' : 'Local only'}</strong></div>
-                {!isHosted ? (
+                {authStatus.mode === 'signed-in' ? (
                   <>
-                    <div className="settings-row"><span>Cloud auth</span><strong>{supabaseEnv.configured ? authStatus.label : 'Supabase not configured'}</strong></div>
-                    <div className="settings-row"><span>Workspace bootstrap</span><strong>{workspaceBootstrap.label}</strong></div>
-                    <div className="settings-row"><span>Supabase project</span><strong>{supabaseEnv.projectHost ?? 'Add VITE_SUPABASE_* env vars'}</strong></div>
-                    <p className="settings-muted">{authStatus.description}</p>
-                    <p className="settings-muted">{workspaceBootstrap.description}</p>
+                    <label className="settings-field">
+                      <span>Display name</span>
+                      <input
+                        type="text"
+                        value={displayName}
+                        onChange={(event) => setDisplayName(event.target.value)}
+                        onBlur={() => {
+                          if (displayName.trim()) void saveDisplayName(displayName)
+                        }}
+                        placeholder="Your name"
+                      />
+                    </label>
+                    <div className="settings-row"><span>Email</span><strong>{authStatus.email ?? 'Unknown'}</strong></div>
+                    {displayNameSavedAt ? <p className="settings-status">Display name saved.</p> : null}
+                    {displayNameError ? <p className="settings-status settings-status--error">{displayNameError}</p> : null}
+                    <div className="settings-actions">
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={async () => {
+                          const result = await signOutOfSupabase()
+                          setAuthActionMessage(result.message)
+                        }}
+                      >Sign out</button>
+                    </div>
                   </>
-                ) : null}
-                {authStatus.mode === 'signed-in' ? (
-                  <div className="settings-row"><span>Signed in as</span><strong>{authStatus.email ?? 'Unknown'}</strong></div>
                 ) : (
-                  <label className="settings-field">
-                    <span>Email for magic link</span>
-                    <input
-                      type="email"
-                      value={authEmail}
-                      onChange={(event) => setAuthEmail(event.target.value)}
-                      placeholder={isHosted ? 'you@example.com' : DEV_ADMIN_EMAIL}
-                      disabled={!supabaseEnv.configured}
-                    />
-                  </label>
-                )}
-                {!isHosted && authStatus.mode !== 'signed-in' ? (
-                  <p className="settings-muted">Dev admin email is prefilled for local staging. No real admin account is created here.</p>
-                ) : null}
-                {authStatus.mode === 'signed-in' ? (
-                  <div className="settings-actions">
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      onClick={async () => {
-                        const result = await signOutOfSupabase()
-                        setAuthActionMessage(result.message)
-                      }}
-                    >Sign out</button>
-                  </div>
-                ) : (
-                  <div className="settings-actions">
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      disabled={!canRequestMagicLink}
-                      onClick={async () => {
-                        const result = await requestMagicLink(authEmail)
-                        setAuthActionMessage(result.message)
-                      }}
-                    >Send magic link</button>
-                  </div>
+                  <>
+                    <label className="settings-field">
+                      <span>Email for magic link</span>
+                      <input
+                        type="email"
+                        value={authEmail}
+                        onChange={(event) => setAuthEmail(event.target.value)}
+                        placeholder={isHosted ? 'you@example.com' : DEV_ADMIN_EMAIL}
+                        disabled={!supabaseEnv.configured}
+                      />
+                    </label>
+                    {!isHosted ? (
+                      <p className="settings-muted">Dev admin email is prefilled for local staging. No real admin account is created here.</p>
+                    ) : null}
+                    <div className="settings-actions">
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        disabled={!canRequestMagicLink}
+                        onClick={async () => {
+                          const result = await requestMagicLink(authEmail)
+                          setAuthActionMessage(result.message)
+                        }}
+                      >Send magic link</button>
+                    </div>
+                  </>
                 )}
                 {authActionMessage ? <p className="settings-status">{authActionMessage}</p> : null}
               </section>
@@ -3203,7 +3223,7 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
 
           {settingsTab === 'billing' && isHosted && (
             <div className="settings-grid">
-              <BillingSettingsPanel activeWorkspace={activeWorkspace} authStatus={authStatus} />
+              <BillingSettingsPanel activeWorkspace={activeWorkspace} authStatus={authStatus} workspaceBootstrap={workspaceBootstrap} />
             </div>
           )}
 
@@ -3343,9 +3363,10 @@ function CreditsUsagePanel({ supabaseEnv, authStatus, connectionTestCost }: {
   )
 }
 
-function BillingSettingsPanel({ activeWorkspace, authStatus }: { activeWorkspace: ActiveWorkspace; authStatus: AuthStatus }) {
+function BillingSettingsPanel({ activeWorkspace, authStatus, workspaceBootstrap }: { activeWorkspace: ActiveWorkspace; authStatus: AuthStatus; workspaceBootstrap: PersonalWorkspaceBootstrapStatus }) {
   const billingEnv = useMemo(() => getBillingEnv(), [])
-  const { status, error, loading } = useSubscriptionStatus(activeWorkspace.id, authStatus)
+  const workspaceId = workspaceBootstrap.mode === 'ready' && workspaceBootstrap.workspaceId ? workspaceBootstrap.workspaceId : activeWorkspace.id
+  const { status, error, loading } = useSubscriptionStatus(workspaceId, authStatus)
   const [pricingOpen, setPricingOpen] = useState(false)
   const [busyPlanId, setBusyPlanId] = useState<string | null>(null)
   const [actionError, setActionError] = useState('')
@@ -3354,7 +3375,7 @@ function BillingSettingsPanel({ activeWorkspace, authStatus }: { activeWorkspace
   async function startCheckout(planId: string) {
     setBusyPlanId(planId)
     setActionError('')
-    const result = await createCheckoutSession(activeWorkspace.id, planId)
+    const result = await createCheckoutSession(workspaceId, planId)
     setBusyPlanId(null)
     if (result.ok) {
       window.location.assign(result.data.url)
@@ -3365,7 +3386,7 @@ function BillingSettingsPanel({ activeWorkspace, authStatus }: { activeWorkspace
 
   async function openPortal() {
     setActionError('')
-    const result = await createBillingPortalSession(activeWorkspace.id)
+    const result = await createBillingPortalSession(workspaceId)
     if (result.ok) {
       window.location.assign(result.data.url)
       return
@@ -3382,10 +3403,25 @@ function BillingSettingsPanel({ activeWorkspace, authStatus }: { activeWorkspace
         <p className="settings-muted">Sign in to check hosted plan status.</p>
       ) : (
         <>
-          <div className="settings-row"><span>Billing service</span><strong>{billingEnv.host}</strong></div>
           <div className="settings-row"><span>Current plan</span><strong>{loading ? 'Checking…' : status.planName}</strong></div>
           <div className="settings-row"><span>Status</span><strong>{status.status}</strong></div>
           {status.periodEnd ? <div className="settings-row"><span>Period ends</span><strong>{new Date(status.periodEnd).toLocaleDateString()}</strong></div> : null}
+          {status.plans.length > 0 ? (
+            <div style={{ marginTop: 12 }}>
+              <span style={{ fontWeight: 600, fontSize: '0.85em', color: 'var(--muted)' }}>Available features by plan</span>
+              {status.plans.map((plan) => {
+                const isCurrent = plan.id === status.planId
+                return (
+                  <div key={plan.id} style={{ marginTop: 8, opacity: isCurrent ? 1 : 0.5 }}>
+                    <span style={{ fontWeight: 600 }}>{plan.name}{isCurrent ? <span style={{ marginLeft: 6, color: 'var(--accent)', fontSize: '0.85em' }}>· Current</span> : null}</span>
+                    <ul className="settings-list" style={{ marginTop: 4 }}>
+                      {plan.features.map((feature) => <li key={feature}>{feature}</li>)}
+                    </ul>
+                  </div>
+                )
+              })}
+            </div>
+          ) : null}
           <div className="settings-actions">
             <button type="button" className="btn btn-primary" disabled={!canUseBilling} onClick={() => setPricingOpen(true)}>Upgrade</button>
             <button type="button" className="btn btn-secondary" disabled={!canUseBilling} onClick={() => void openPortal()}>Manage billing</button>
@@ -3396,6 +3432,7 @@ function BillingSettingsPanel({ activeWorkspace, authStatus }: { activeWorkspace
       {pricingOpen ? (
         <PricingModal
           plans={status.plans}
+          currentPlanId={status.planId}
           busyPlanId={busyPlanId}
           error={actionError}
           onClose={() => setPricingOpen(false)}

@@ -6,29 +6,20 @@ export type SyncStatus = 'local-only' | 'synced' | 'syncing' | 'offline'
 export function useSyncStatus(authStatus?: AuthStatus) {
   const env = getSupabaseEnv()
 
-  if (env.configured) {
-    if (authStatus?.mode === 'signed-in') {
-      return {
-        status: 'synced' as SyncStatus,
-        label: authStatus.email ?? 'Synced',
-        description: 'Authenticated and connected to Supabase.',
-        syncNow: async () => undefined,
-      }
-    }
-
+  if (authStatus?.mode === 'signed-in') {
     return {
-      status: 'local-only' as SyncStatus,
-      label: 'Supabase ready',
-      description: `Bound to ${env.projectHost}. Sign in to switch to cloud storage.`,
+      status: 'synced' as SyncStatus,
+      label: 'Synced',
+      description: 'Authenticated and connected to Supabase.',
       syncNow: async () => undefined,
     }
   }
 
-  if (env.mode !== 'missing') {
+  if (env.configured) {
     return {
       status: 'local-only' as SyncStatus,
-      label: 'Config incomplete',
-      description: env.message,
+      label: 'Sign in to sync',
+      description: `Signed out. Cloud data is synced when you sign in.`,
       syncNow: async () => undefined,
     }
   }
@@ -36,7 +27,7 @@ export function useSyncStatus(authStatus?: AuthStatus) {
   return {
     status: 'local-only' as SyncStatus,
     label: 'Local only',
-    description: `${env.message} Cloud sync remains opt-in, RLS-protected, and recoverable.`,
+    description: env.message,
     syncNow: async () => undefined,
   }
 }
