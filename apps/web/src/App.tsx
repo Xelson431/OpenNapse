@@ -2827,7 +2827,6 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
   const [settingsTab, setSettingsTab] = useState<'account' | 'ai' | 'data' | 'billing' | 'advanced'>('account')
   const statusToShow = statusMessage
   const canRequestMagicLink = supabaseEnv.configured && authStatus.mode !== 'loading' && authStatus.mode !== 'signed-in' && authEmail.trim().length > 0
-  const canSignOut = supabaseEnv.configured && authStatus.mode === 'signed-in'
 
   function updateProvider(providerId: AISettings['activeProviderId']) {
     onAISettingsChange({ ...aiSettings, activeProviderId: providerId })
@@ -2981,39 +2980,47 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
                     <p className="settings-muted">{workspaceBootstrap.description}</p>
                   </>
                 ) : null}
-                <label className="settings-field">
-                  <span>Email for magic link</span>
-                  <input
-                    type="email"
-                    value={authEmail}
-                    onChange={(event) => setAuthEmail(event.target.value)}
-                    placeholder={isHosted ? 'you@example.com' : DEV_ADMIN_EMAIL}
-                    disabled={!supabaseEnv.configured || authStatus.mode === 'signed-in'}
-                  />
-                </label>
-                {!isHosted ? (
+                {authStatus.mode === 'signed-in' ? (
+                  <div className="settings-row"><span>Signed in as</span><strong>{authStatus.email ?? 'Unknown'}</strong></div>
+                ) : (
+                  <label className="settings-field">
+                    <span>Email for magic link</span>
+                    <input
+                      type="email"
+                      value={authEmail}
+                      onChange={(event) => setAuthEmail(event.target.value)}
+                      placeholder={isHosted ? 'you@example.com' : DEV_ADMIN_EMAIL}
+                      disabled={!supabaseEnv.configured}
+                    />
+                  </label>
+                )}
+                {!isHosted && authStatus.mode !== 'signed-in' ? (
                   <p className="settings-muted">Dev admin email is prefilled for local staging. No real admin account is created here.</p>
                 ) : null}
-                <div className="settings-actions">
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    disabled={!canRequestMagicLink}
-                    onClick={async () => {
-                      const result = await requestMagicLink(authEmail)
-                      setAuthActionMessage(result.message)
-                    }}
-                  >Send magic link</button>
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    disabled={!canSignOut}
-                    onClick={async () => {
-                      const result = await signOutOfSupabase()
-                      setAuthActionMessage(result.message)
-                    }}
-                  >Sign out</button>
-                </div>
+                {authStatus.mode === 'signed-in' ? (
+                  <div className="settings-actions">
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={async () => {
+                        const result = await signOutOfSupabase()
+                        setAuthActionMessage(result.message)
+                      }}
+                    >Sign out</button>
+                  </div>
+                ) : (
+                  <div className="settings-actions">
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={!canRequestMagicLink}
+                      onClick={async () => {
+                        const result = await requestMagicLink(authEmail)
+                        setAuthActionMessage(result.message)
+                      }}
+                    >Send magic link</button>
+                  </div>
+                )}
                 {authActionMessage ? <p className="settings-status">{authActionMessage}</p> : null}
               </section>
 

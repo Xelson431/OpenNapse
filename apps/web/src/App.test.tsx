@@ -427,9 +427,9 @@ describe('App shell', () => {
     expect(screen.getByLabelText(/email for magic link/i)).toBeDisabled()
     expect(screen.getByLabelText(/email for magic link/i)).toHaveValue('admin@opennapse.local')
     expect(screen.getByRole('button', { name: /send magic link/i })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /sign out/i })).toBeDisabled()
     expect(screen.getByText(/Dev admin email is prefilled/i)).toBeInTheDocument()
     expect(screen.getByText(/Bootstrap waiting/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /sign out/i })).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /^data$/i }))
     expect(screen.getByRole('heading', { name: /Workspace/i })).toBeInTheDocument()
