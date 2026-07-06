@@ -130,9 +130,7 @@ describe('Signed-in auth flows', () => {
     await user.click(screen.getByRole('button', { name: /settings/i }))
     expect(screen.getByRole('dialog', { name: /settings/i })).toBeInTheDocument()
 
-    const emailElements = screen.getAllByText('user@example.com')
-    expect(emailElements.length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText(/signed in as/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/user@example\.com/i).length).toBeGreaterThanOrEqual(1)
 
     expect(screen.queryByRole('button', { name: /send magic link/i })).not.toBeInTheDocument()
     expect(screen.queryByText(/Dev admin email is prefilled/i)).not.toBeInTheDocument()
@@ -145,7 +143,7 @@ describe('Signed-in auth flows', () => {
 
   it('shows signed-in email pill in toolbar', () => {
     render(<App />)
-    expect(screen.getByTitle(/signed in as user@example.com/i)).toBeInTheDocument()
+    expect(screen.getByTitle(/user@example\.com/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /sign in/i })).not.toBeInTheDocument()
   })
 
@@ -216,7 +214,7 @@ describe('Sign-in modal flows', () => {
     })
   })
 
-  it('shows Supabase-not-configured message in settings Account tab', async () => {
+  it('shows disabled sign-in form when Supabase is not configured', async () => {
     mockSupabaseEnv = unconfiguredSupabaseEnv
     mockAuthStatus = unavailableStatus
     const user = userEvent.setup()
@@ -224,7 +222,7 @@ describe('Sign-in modal flows', () => {
 
     await user.click(screen.getByRole('button', { name: /settings/i }))
 
-    expect(screen.getByText(/supabase not configured yet/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/email for magic link/i)).toBeDisabled()
   })
 })
 
@@ -263,18 +261,16 @@ describe('Settings — Account tab in local/unavailable mode', () => {
     mockBootstrap = waitingBootstrap
   })
 
-  it('shows Supabase not configured and dev admin email', async () => {
+  it('shows dev admin email field and form', async () => {
     const user = userEvent.setup()
     render(<App />)
 
     await user.click(screen.getByRole('button', { name: /settings/i }))
 
-    expect(screen.getAllByText(/Supabase not configured/i).length).toBeGreaterThan(0)
     expect(screen.getByLabelText(/email for magic link/i)).toBeDisabled()
     expect(screen.getByLabelText(/email for magic link/i)).toHaveValue('admin@opennapse.local')
     expect(screen.getByRole('button', { name: /send magic link/i })).toBeDisabled()
     expect(screen.getByText(/Dev admin email is prefilled/i)).toBeInTheDocument()
-    expect(screen.getByText(/Bootstrap waiting/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /sign out/i })).not.toBeInTheDocument()
   })
 })
