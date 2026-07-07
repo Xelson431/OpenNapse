@@ -458,4 +458,76 @@ describe('App shell', () => {
       expect(localStorage.getItem('OpenNapse:v0:tasks')).toContain('"columnId":"todo"')
     })
   })
+
+  it('saves a new note via the dirty-state save button for guest users', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getAllByRole('button', { name: /^notes$/i })[0])
+
+    await user.clear(screen.getByLabelText(/note title/i))
+    await user.type(screen.getByLabelText(/note title/i), 'Dirty-state test note')
+
+    const saveBtn = screen.getByRole('button', { name: /save note/i })
+    expect(saveBtn).not.toBeDisabled()
+
+    await user.click(saveBtn)
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('OpenNapse:v0:notes') ?? '[]') as Array<{ title: string }>
+      expect(stored.some((n) => n.title === 'Dirty-state test note')).toBe(true)
+    })
+  })
+
+  it('saves an existing note after changing title', async () => {
+    const user = userEvent.setup()
+    const noteId = crypto.randomUUID()
+    const now = new Date().toISOString()
+    localStorage.setItem('OpenNapse:v0:notes', JSON.stringify([
+      { id: noteId, workspaceId: 'local-personal-workspace', createdBy: 'test-user', title: 'Original title', content: 'Hello', linkedProjectId: null, tags: [], color: '#78716C', voiceRecordings: [], createdAt: now, updatedAt: now, version: 1, clientId: 'test', deviceId: 'test', isDeleted: false },
+    ]))
+    render(<App />)
+
+    await user.click(screen.getAllByRole('button', { name: /^notes$/i })[0])
+    await screen.findByText('Original title')
+
+    await user.clear(screen.getByLabelText(/note title/i))
+    await user.type(screen.getByLabelText(/note title/i), 'Updated title')
+
+    const saveBtn = screen.getByRole('button', { name: 'Save' })
+    expect(saveBtn).not.toBeDisabled()
+    await user.click(saveBtn)
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('OpenNapse:v0:notes') ?? '[]') as Array<{ id: string; title: string }>
+      const note = stored.find((n) => n.id === noteId)
+      expect(note?.title).toBe('Updated title')
+    })
+  })
+
+  it('renders WYSIWYG toolbar with formatting buttons', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getAllByRole('button', { name: /^notes$/i })[0])
+
+    expect(screen.getByTitle('Bold')).toBeInTheDocument()
+    expect(screen.getByTitle('Italic')).toBeInTheDocument()
+    expect(screen.getByTitle('Underline')).toBeInTheDocument()
+    expect(screen.getByTitle('Code')).toBeInTheDocument()
+    expect(screen.getByTitle('Link')).toBeInTheDocument()
+    expect(screen.getByTitle('Bullet list')).toBeInTheDocument()
+    expect(screen.getByTitle('Numbered list')).toBeInTheDocument()
+  })
+
+  it('renders contenteditable editor for rich text input', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getAllByRole('button', { name: /^notes$/i })[0])
+
+    const editor = document.querySelector('[contenteditable="true"]')
+    expect(editor).toBeInTheDocument()
+    expect(editor).toHaveClass('note-editor-rich')
+  })
 })

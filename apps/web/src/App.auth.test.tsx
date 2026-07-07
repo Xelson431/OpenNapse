@@ -188,6 +188,32 @@ describe('Signed-in auth flows', () => {
   })
 })
 
+describe('Billing gate', () => {
+  beforeEach(() => {
+    mockSupabaseEnv = configuredSupabaseEnv
+    mockBillingEnv = unconfiguredBillingEnv
+    mockAuthStatus = signedInStatus
+    mockBootstrap = readyBootstrap
+  })
+
+  it('hides billing tab when billing URL is not configured (open-source mode)', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: /settings/i }))
+    expect(screen.queryByRole('button', { name: /^billing$/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^advanced$/i })).toBeInTheDocument()
+  })
+
+  it('does not block core functionality when billing is unconfigured', async () => {
+    render(<App />)
+
+    expect(screen.getByRole('button', { name: /dump idea/i })).toBeEnabled()
+    expect(screen.getAllByRole('button', { name: /^notes$/i }).length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: /toggle theme/i })).toBeInTheDocument()
+  })
+})
+
 describe('Sign-in modal flows', () => {
   beforeEach(() => {
     mockSupabaseEnv = configuredSupabaseEnv
