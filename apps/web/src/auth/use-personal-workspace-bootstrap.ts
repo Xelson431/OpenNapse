@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { AuthStatus } from './use-auth-status'
 import { ensurePersonalWorkspaceForCurrentSession } from './ensure-personal-workspace'
 
+const BOOTSTRAP_TIMEOUT_MS = 15_000
+
 export type PersonalWorkspaceBootstrapStatus = {
   mode: 'idle' | 'bootstrapping' | 'ready' | 'failed'
   label: string
@@ -41,27 +43,43 @@ export function usePersonalWorkspaceBootstrap(authStatus: AuthStatus): PersonalW
     void (async () => {
       setStatus(bootstrappingStatus)
 
-      const result = await ensurePersonalWorkspaceForCurrentSession({
-        id: userId,
-        email: authStatus.email,
-      })
+      try {
+        const result = await Promise.race([
+          ensurePersonalWorkspaceForCurrentSession({
+            id: userId,
+            email: authStatus.email,
+          }),
+          timeout(BOOTSTRAP_TIMEOUT_MS),
+        ])
 
-      if (!active) return
-      if (result.ok) {
+        if (!active) return
+
+        if (result.ok) {
+          setStatus({
+            mode: 'ready',
+            label: 'Workspace ready',
+            description: result.message,
+            workspaceId: result.workspaceId,
+          })
+          return
+        }
+
         setStatus({
-          mode: 'ready',
-          label: 'Workspace ready',
+          mode: 'failed',
+          label: 'Bootstrap failed',
           description: result.message,
-          workspaceId: result.workspaceId,
         })
-        return
+      } catch (err) {
+        if (!active) return
+        const message = err instanceof Error ? err.message : String(err)
+        setStatus({
+          mode: 'failed',
+          label: 'Bootstrap failed',
+          description: message.includes('Timed out')
+            ? 'Timed out contacting server. Check your Supabase URL and run pending migrations.'
+            : message,
+        })
       }
-
-      setStatus({
-        mode: 'failed',
-        label: 'Bootstrap failed',
-        description: result.message,
-      })
     })()
 
     return () => {
@@ -71,4 +89,8 @@ export function usePersonalWorkspaceBootstrap(authStatus: AuthStatus): PersonalW
 
   if (authStatus.mode !== 'signed-in' || !authStatus.userId) return idleStatus
   return status ?? bootstrappingStatus
+}
+
+function timeout(ms: number): Promise<never> {
+  return new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out')), ms))
 }
