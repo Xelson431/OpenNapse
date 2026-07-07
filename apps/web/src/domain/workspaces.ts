@@ -38,7 +38,7 @@ export const workspaceModes: Record<WorkspaceMode, { label: string; badge: strin
   personal: {
     label: 'Personal',
     badge: 'Private local',
-    description: 'New ideas, projects, notes, and tasks stay on this device unless you explicitly export or opt into cloud sync.',
+    description: 'Personal workspaces are private by default. Your content is stored locally (and synced to your account if connected).',
   },
   'team-preview': {
     label: 'Team preview',
