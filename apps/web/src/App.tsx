@@ -1417,39 +1417,49 @@ function plainTextPreview(md: string, max = 50): string {
   return text.substring(0, max)
 }
 
-function NoteEditor({ activeId, notes, projects, selectedProjectId, onSave }: { activeId?: string; notes: Note[]; projects: Project[]; selectedProjectId?: string; onSave: (input: { id?: string; title: string; content: string; linkedProjectId?: string | null; voiceRecordings?: VoiceRecording[] }) => Promise<void> }) {
+function NoteEditor({ activeId, notes, selectedProjectId, onSave }: { activeId?: string; notes: Note[]; projects: Project[]; selectedProjectId?: string; onSave: (input: { id?: string; title: string; content: string; linkedProjectId?: string | null; voiceRecordings?: VoiceRecording[] }) => Promise<void> }) {
   const initialNote = notes.find((note) => note.id === activeId)
-  const [title, setTitle] = useState(initialNote?.title ?? 'Untitled note')
-  const [content, setContent] = useState(initialNote?.content ?? '')
+  const [title, setTitle] = useState(initialNote?.title ?? '')
   const [linkedProjectId] = useState<string>(initialNote?.linkedProjectId ?? selectedProjectId ?? '')
   const [isRecording, setIsRecording] = useState(false)
   const [recordings, setRecordings] = useState<VoiceRecording[]>(initialNote?.voiceRecordings ?? [])
-  const [previewMode, setPreviewMode] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error' | ''>('')
   const [saveError, setSaveError] = useState('')
+  const editorRef = useRef<HTMLDivElement | null>(null)
+  const titleRef = useRef<HTMLInputElement | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const chunksRef = useRef<Blob[]>([])
   const startTimeRef = useRef<number>(0)
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const mountedRef = useRef(true)
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Reset state when switching notes
+  // Convert markdown to HTML for existing notes that are in markdown format.
+  function prepareContent(raw: string): string {
+    if (!raw) return ''
+    if (/^\s*</.test(raw)) return raw
+    return renderMarkdown(raw)
+  }
+
+  function getBodyHtml(): string {
+    return editorRef.current?.innerHTML ?? ''
+  }
+
+  // Reset when switching notes
   useEffect(() => {
     const note = notes.find((n) => n.id === activeId)
     /* eslint-disable react-hooks/set-state-in-effect */
-    setTitle(note?.title ?? 'Untitled note')
-    setContent(note?.content ?? '')
+    setTitle(note?.title ?? '')
     setRecordings(note?.voiceRecordings ?? [])
     setDirty(false)
     setSaveStatus('')
     setSaveError('')
     setSubmitting(false)
-    setPreviewMode(true)
     /* eslint-enable react-hooks/set-state-in-effect */
+    const html = prepareContent(note?.content ?? '')
+    if (editorRef.current) editorRef.current.innerHTML = html
   }, [activeId, notes])
 
   useEffect(() => {
@@ -1467,44 +1477,41 @@ function NoteEditor({ activeId, notes, projects, selectedProjectId, onSave }: { 
     }
   }, [])
 
-  // Auto-save existing notes on debounce
-  const doSave = useCallback(async (id: string | undefined, saveTitle: string, saveContent: string) => {
-    if (!id || !dirty) return
-    setSaveStatus('saving')
-    try {
-      await onSave({ id, title: saveTitle, content: saveContent, linkedProjectId: linkedProjectId || null, voiceRecordings: recordings })
-      setDirty(false)
-      setSaveStatus('saved')
-      setSaveError('')
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      logger.error('note', 'Auto-save note failed', { id: activeId, error: msg })
-      setSaveError(msg)
-      setSaveStatus('error')
-    }
-  }, [activeId, linkedProjectId, recordings, dirty, onSave])
+  function markDirty() {
+    setDirty(true)
+    setSaveStatus('')
+  }
 
+  // Auto-save existing notes on debounce (reads DOM directly)
   useEffect(() => {
     if (!activeId || !dirty) return
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
     autoSaveTimerRef.current = setTimeout(() => {
-      doSave(activeId, title, content)
+      if (!dirty) return
+      const html = getBodyHtml()
+      const t = titleRef.current?.value ?? title
+      setSaveStatus('saving')
+      onSave({ id: activeId, title: t, content: html, linkedProjectId: linkedProjectId || null, voiceRecordings: recordings })
+        .then(() => {
+          setDirty(false)
+          setSaveStatus('saved')
+          setSaveError('')
+        })
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err)
+          logger.error('note', 'Auto-save note failed', { id: activeId, error: msg })
+          setSaveError(msg)
+          setSaveStatus('error')
+        })
     }, 2000)
     return () => {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
     }
-  }, [activeId, title, content, dirty, doSave])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, title, linkedProjectId, recordings, onSave])
 
-  const handleTitleChange = useCallback((value: string) => {
-    setTitle(value)
-    setDirty(true)
-    setSaveStatus('')
-  }, [])
-
-  const handleContentChange = useCallback((value: string) => {
-    setContent(value)
-    setDirty(true)
-    setSaveStatus('')
+  const handleContentInput = useCallback(() => {
+    markDirty()
   }, [])
 
   const handleSave = useCallback(async () => {
@@ -1512,8 +1519,10 @@ function NoteEditor({ activeId, notes, projects, selectedProjectId, onSave }: { 
     setSubmitting(true)
     setSaveError('')
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
+    const html = getBodyHtml()
+    const t = titleRef.current?.value ?? title
     try {
-      await onSave({ id: activeId, title, content, linkedProjectId: linkedProjectId || null, voiceRecordings: recordings })
+      await onSave({ id: activeId, title: t, content: html, linkedProjectId: linkedProjectId || null, voiceRecordings: recordings })
       setDirty(false)
       setSaveStatus('saved')
     } catch (err) {
@@ -1524,22 +1533,23 @@ function NoteEditor({ activeId, notes, projects, selectedProjectId, onSave }: { 
     } finally {
       setSubmitting(false)
     }
-  }, [activeId, title, content, linkedProjectId, recordings, submitting, dirty, onSave])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, title, linkedProjectId, recordings, submitting, onSave])
 
-  const wrapSelection = useCallback((before: string, after: string = before) => {
-    const el = textareaRef.current
-    if (!el) return
-    const start = el.selectionStart
-    const end = el.selectionEnd
-    const selected = content.substring(start, end)
-    const newContent = content.substring(0, start) + before + selected + after + content.substring(end)
-    handleContentChange(newContent)
-    requestAnimationFrame(() => {
-      el.focus()
-      const caret = start + before.length + selected.length
-      el.setSelectionRange(caret, caret)
-    })
-  }, [content, handleContentChange])
+  const execCmd = useCallback((command: string, value?: string) => {
+    editorRef.current?.focus()
+    document.execCommand(command, false, value)
+    markDirty()
+  }, [])
+
+  const handleLink = useCallback(() => {
+    editorRef.current?.focus()
+    const url = prompt('Enter URL:')
+    if (url) {
+      document.execCommand('createLink', false, url)
+      markDirty()
+    }
+  }, [])
 
   const recordingSupported = useMemo(() => {
     return typeof window !== 'undefined' && 'MediaRecorder' in window && 'navigator' in window && 'mediaDevices' in navigator
@@ -1596,7 +1606,7 @@ function NoteEditor({ activeId, notes, projects, selectedProjectId, onSave }: { 
 
   const removeRecording = useCallback((id: string) => {
     setRecordings((prev) => prev.filter((r) => r.id !== id))
-    setDirty(true)
+    markDirty()
   }, [])
 
   const saveLabel = !activeId ? 'Save note' : submitting ? 'Saving...' : !dirty ? 'Saved' : 'Save'
@@ -1606,16 +1616,15 @@ function NoteEditor({ activeId, notes, projects, selectedProjectId, onSave }: { 
     <>
       <div className="notes-editor">
         <div className="notes-editor-toolbar" aria-label="Local document">
-          {!previewMode && (
-            <>
-              <button type="button" className="toolbar-btn" title="Bold" onClick={() => wrapSelection('**')}><Icon name="bold" /></button>
-              <button type="button" className="toolbar-btn" title="Italic" onClick={() => wrapSelection('*')}><Icon name="italic" /></button>
-              <button type="button" className="toolbar-btn" title="Code" onClick={() => wrapSelection('`')}><Icon name="code" /></button>
-              <div className="toolbar-divider" />
-              <button type="button" className="toolbar-btn" title="Link" onClick={() => wrapSelection('[', '](url)')}><Icon name="link" /></button>
-              <button type="button" className="toolbar-btn" title="List" onClick={() => wrapSelection('- ')}><Icon name="list" /></button>
-            </>
-          )}
+          <button type="button" className="toolbar-btn" title="Bold" onMouseDown={(e) => { e.preventDefault(); execCmd('bold') }}><Icon name="bold" /></button>
+          <button type="button" className="toolbar-btn" title="Italic" onMouseDown={(e) => { e.preventDefault(); execCmd('italic') }}><Icon name="italic" /></button>
+          <button type="button" className="toolbar-btn" title="Underline" onMouseDown={(e) => { e.preventDefault(); execCmd('underline') }}><u>U</u></button>
+          <div className="toolbar-divider" />
+          <button type="button" className="toolbar-btn" title="Code" onMouseDown={(e) => { e.preventDefault(); execCmd('insertHTML', '<code>' + (window.getSelection()?.toString() ?? '') + '</code>') }}><Icon name="code" /></button>
+          <button type="button" className="toolbar-btn" title="Link" onMouseDown={(e) => { e.preventDefault(); handleLink() }}><Icon name="link" /></button>
+          <div className="toolbar-divider" />
+          <button type="button" className="toolbar-btn" title="Bullet list" onMouseDown={(e) => { e.preventDefault(); execCmd('insertUnorderedList') }}><Icon name="list" /></button>
+          <button type="button" className="toolbar-btn" title="Numbered list" onMouseDown={(e) => { e.preventDefault(); execCmd('insertOrderedList') }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="16" height="16"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg></button>
           {recordingSupported && (
             <button
               type="button"
@@ -1626,28 +1635,20 @@ function NoteEditor({ activeId, notes, projects, selectedProjectId, onSave }: { 
               <Icon name="mic" />
             </button>
           )}
-          <div className="toolbar-divider" />
-          <button
-            type="button"
-            className={`toolbar-btn ${previewMode ? 'active' : ''}`}
-            title={previewMode ? 'Edit markdown' : 'Preview'}
-            onClick={() => setPreviewMode((prev) => !prev)}
-          >
-            <Icon name={previewMode ? 'fileText' : 'eye'} />
-          </button>
           <span className="note-save-status">
             {saveStatus === 'saving' ? 'Saving…' : saveStatus === 'saved' ? 'Saved' : saveStatus === 'error' ? 'Save failed' : ''}
           </span>
         </div>
         {isRecording && <span className="note-recording-indicator">Recording…</span>}
         <div className="notes-editor-content">
-          <h3 className="sr-only" style={{display: 'none'}}>Local document</h3>
-          <input className="note-title-input" aria-label="Note title" value={title} onChange={(event) => handleTitleChange(event.target.value)} placeholder="Note title" />
-          {previewMode ? (
-            <div className="note-preview" aria-label="Preview" dangerouslySetInnerHTML={{ __html: content ? renderMarkdown(content) : '<p style="color:var(--muted);font-style:italic">Start writing in markdown…</p>' }} />
-          ) : (
-            <textarea ref={textareaRef} className="note-body-input" aria-label="Note content" value={content} onChange={(event) => handleContentChange(event.target.value)} placeholder="Write notes, context, decisions, and backlinks here using markdown..." />
-          )}
+          <input ref={titleRef} className="note-title-input" aria-label="Note title" defaultValue={title} onChange={() => markDirty()} placeholder="Note title" />
+          <div
+            ref={editorRef}
+            className="note-editor-rich"
+            contentEditable
+            suppressContentEditableWarning
+            onInput={handleContentInput}
+          />
           {recordings.length > 0 && (
             <div className="note-recordings">
               {recordings.map((rec) => (
@@ -1665,19 +1666,6 @@ function NoteEditor({ activeId, notes, projects, selectedProjectId, onSave }: { 
             {saveError ? <p className="settings-status settings-status--error">{saveError}</p> : null}
           </div>
         </div>
-      </div>
-
-      <div className="notes-linked">
-        <h4>Linked Entities</h4>
-        {linkedProjectId ? projects.filter(p => p.id === linkedProjectId).map((project, i) => (
-          <div key={i} className="linked-entity">
-            <div className="linked-entity-icon project"><Icon name="folder" /></div>
-            <div>
-              <div className="linked-entity-title">{project.title}</div>
-              <div className="linked-entity-type">project</div>
-            </div>
-          </div>
-        )) : <p style={{fontSize: 12, color: 'var(--muted)'}}>No linked entities.</p>}
       </div>
     </>
   )
