@@ -1,11 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi, beforeAll, afterAll, beforeEach } from 'vitest'
 import { assertWriteAllowed, RateLimitError, resetWriteRateLimits } from './rate-limiter'
 
-describe('assertWriteAllowed', () => {
-  beforeEach(() => {
-    resetWriteRateLimits()
-  })
+beforeEach(() => {
+  resetWriteRateLimits()
+})
 
+describe('assertWriteAllowed', () => {
   it('allows first call for any operation', () => {
     expect(() => assertWriteAllowed('upsertNote')).not.toThrow()
     expect(() => assertWriteAllowed('createIdea')).not.toThrow()
@@ -30,7 +30,6 @@ describe('assertWriteAllowed', () => {
     for (let i = 0; i < 30; i++) {
       assertWriteAllowed('createIdea')
     }
-    // Different operation should still be allowed
     expect(() => assertWriteAllowed('upsertNote')).not.toThrow()
   })
 
@@ -39,9 +38,7 @@ describe('assertWriteAllowed', () => {
       assertWriteAllowed('createIdea')
     }
     expect(() => assertWriteAllowed('createIdea')).toThrow(RateLimitError)
-
     resetWriteRateLimits()
-
     expect(() => assertWriteAllowed('createIdea')).not.toThrow()
   })
 
@@ -66,5 +63,58 @@ describe('assertWriteAllowed', () => {
       assertWriteAllowed('importData')
     }
     expect(() => assertWriteAllowed('importData')).toThrow(RateLimitError)
+  })
+
+  it('fails on the exact Nth+1 call, not before', () => {
+    // limit is 20 — calls 1-20 pass, call 21 should throw
+    for (let i = 0; i < 20; i++) {
+      expect(() => assertWriteAllowed('upsertNote')).not.toThrow()
+    }
+    expect(() => assertWriteAllowed('upsertNote')).toThrow(RateLimitError)
+  })
+
+  it('tolerates micro-bursts: all N calls in the same millisecond', () => {
+    for (let i = 0; i < 30; i++) {
+      assertWriteAllowed('createIdea')
+    }
+    expect(() => assertWriteAllowed('createIdea')).toThrow(RateLimitError)
+  })
+
+  it('interleaved operations do not interfere', () => {
+    for (let i = 0; i < 20; i++) {
+      assertWriteAllowed('upsertNote')
+      if (i < 5) assertWriteAllowed('importData')
+    }
+    expect(() => assertWriteAllowed('upsertNote')).toThrow(RateLimitError)
+    expect(() => assertWriteAllowed('importData')).toThrow(RateLimitError)
+    expect(() => assertWriteAllowed('createIdea')).not.toThrow()
+  })
+
+  it('all operation types have independent counters', () => {
+    const ops: Array<Parameters<typeof assertWriteAllowed>[0]> = [
+      'createIdea', 'buryIdea', 'resurrectIdea', 'moveIdeaToProject',
+      'createProject', 'promoteIdea', 'createTask', 'moveTask',
+      'updateTask', 'upsertNote', 'deleteNote', 'importData', 'clearAllData',
+      'workspaceMutation',
+    ]
+    for (const op of ops) {
+      assertWriteAllowed(op)
+    }
+    for (const op of ops) {
+      expect(() => assertWriteAllowed(op)).not.toThrow()
+    }
+  })
+
+  it('window expiration allows new calls after time passes', () => {
+    vi.useFakeTimers()
+    for (let i = 0; i < 20; i++) {
+      assertWriteAllowed('upsertNote')
+    }
+    expect(() => assertWriteAllowed('upsertNote')).toThrow(RateLimitError)
+
+    vi.advanceTimersByTime(60_001)
+
+    expect(() => assertWriteAllowed('upsertNote')).not.toThrow()
+    vi.useRealTimers()
   })
 })

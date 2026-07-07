@@ -636,6 +636,15 @@ export class SupabaseCloudAdapter implements DBAdapter {
     return rowToNote(data as UnknownRow)
   }
 
+  async deleteNote(id: string): Promise<void> {
+    const client = this.requireClient('deleteNote')
+    const { error } = await client.from('notes').update({ is_deleted: true }).eq('id', id)
+    if (error) {
+      logger.error('cloud', 'deleteNote failed', { error: error.message, id })
+      throw new Error(`deleteNote: ${error.message}`)
+    }
+  }
+
   async exportData(): Promise<string> {
     const [ideas, projects, tasks, notes] = await Promise.all([
       this.listIdeas(),

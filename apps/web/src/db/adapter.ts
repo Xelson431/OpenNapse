@@ -35,6 +35,7 @@ export interface DBAdapter {
   moveTask(id: string, columnId: TaskColumn): Promise<Task>
   updateTask(id: string, input: UpdateTaskInput): Promise<Task>
   upsertNote(input: UpsertNoteInput): Promise<Note>
+  deleteNote(id: string): Promise<void>
   exportData(): Promise<string>
   importData(payload: string): Promise<void>
   clearAllData(): Promise<void>

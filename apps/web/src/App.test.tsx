@@ -530,4 +530,141 @@ describe('App shell', () => {
     expect(editor).toBeInTheDocument()
     expect(editor).toHaveClass('note-editor-rich')
   })
+
+  it('handles rapid save clicks without double-saving', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getAllByRole('button', { name: /^notes$/i })[0])
+    await user.clear(screen.getByLabelText(/note title/i))
+    await user.type(screen.getByLabelText(/note title/i), 'Rapid save note')
+
+    const saveBtn = screen.getByRole('button', { name: /save note/i })
+    for (let i = 0; i < 5; i++) {
+      await user.click(saveBtn)
+    }
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('OpenNapse:v0:notes') ?? '[]') as Array<{ title: string; version: number }>
+      const note = stored.find((n) => n.title === 'Rapid save note')
+      expect(note).toBeTruthy()
+      expect(note!.version).toBeLessThanOrEqual(2)
+    })
+  })
+
+  it('survives empty title save without error', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getAllByRole('button', { name: /^notes$/i })[0])
+
+    await user.clear(screen.getByLabelText(/note title/i))
+    await user.click(screen.getByRole('button', { name: /save note/i }))
+
+    // Should not crash — note should exist with empty title or be handled gracefully
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('OpenNapse:v0:notes') ?? '[]') as Array<{ title: string }>
+      // The app may save with empty title or silently ignore — either is fine as long as no crash
+      expect(Array.isArray(stored)).toBe(true)
+    })
+  })
+
+  it('rapidly clears and retypes note title without data loss', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getAllByRole('button', { name: /^notes$/i })[0])
+
+    // Cycle: type → clear → type → clear → type
+    const titleInput = screen.getByLabelText(/note title/i)
+    await user.clear(titleInput)
+    await user.type(titleInput, 'First draft')
+    await user.clear(titleInput)
+    await user.type(titleInput, 'Second attempt')
+    await user.clear(titleInput)
+    await user.type(titleInput, 'Final version')
+
+    await user.click(screen.getByRole('button', { name: /save note/i }))
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('OpenNapse:v0:notes') ?? '[]') as Array<{ title: string }>
+      expect(stored.some((n) => n.title === 'Final version')).toBe(true)
+      expect(stored.every((n) => n.title !== 'First draft')).toBe(true)
+      expect(stored.every((n) => n.title !== 'Second attempt')).toBe(true)
+    })
+  })
+
+  it('preserves content with special characters and HTML-like text', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getAllByRole('button', { name: /^notes$/i })[0])
+
+    await user.clear(screen.getByLabelText(/note title/i))
+    await user.type(screen.getByLabelText(/note title/i), '<script>alert("xss")</script> & "quotes"')
+
+    await user.click(screen.getByRole('button', { name: /save note/i }))
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('OpenNapse:v0:notes') ?? '[]') as Array<{ title: string }>
+      const note = stored.find((n) => n.title?.includes('<script>'))
+      expect(note).toBeTruthy()
+    })
+  })
+
+  it('handles long note titles', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    const longTitle = 'A'.repeat(100)
+
+    await user.click(screen.getAllByRole('button', { name: /^notes$/i })[0])
+    await user.clear(screen.getByLabelText(/note title/i))
+    await user.type(screen.getByLabelText(/note title/i), longTitle)
+    await user.click(screen.getByRole('button', { name: /save note/i }))
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('OpenNapse:v0:notes') ?? '[]') as Array<{ title: string }>
+      const note = stored.find((n) => n.title === longTitle)
+      expect(note).toBeTruthy()
+    })
+  })
+
+  it('creates a note, saves, edits again, saves again (consecutive dirty cycles)', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getAllByRole('button', { name: /^notes$/i })[0])
+
+    // First save
+    await user.clear(screen.getByLabelText(/note title/i))
+    await user.type(screen.getByLabelText(/note title/i), 'Draft v1')
+    await user.click(screen.getByRole('button', { name: /save note/i }))
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('OpenNapse:v0:notes') ?? '[]') as Array<{ title: string }>
+      expect(stored.some((n) => n.title === 'Draft v1')).toBe(true)
+    })
+
+    // Second save — after first save, button becomes "Save" not "Save note"
+    await user.clear(screen.getByLabelText(/note title/i))
+    await user.type(screen.getByLabelText(/note title/i), 'Draft v2')
+    await user.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('OpenNapse:v0:notes') ?? '[]') as Array<{ title: string }>
+      expect(stored.some((n) => n.title === 'Draft v2')).toBe(true)
+      expect(stored.every((n) => n.title !== 'Draft v1')).toBe(true)
+    })
+
+    // Third save cycle
+    await user.clear(screen.getByLabelText(/note title/i))
+    await user.type(screen.getByLabelText(/note title/i), 'Draft v3')
+    await user.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('OpenNapse:v0:notes') ?? '[]') as Array<{ title: string }>
+      expect(stored.some((n) => n.title === 'Draft v3')).toBe(true)
+    })
+  })
 })

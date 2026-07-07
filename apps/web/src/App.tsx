@@ -170,7 +170,7 @@ function App() {
   const [cloudMigrationPrompt, setCloudMigrationPrompt] = useState<LocalCloudMigrationPrompt | null>(null)
   const [cloudMigrationMessage, setCloudMigrationMessage] = useState('')
   const { ideas, isLoaded, loadIdeas, createIdea, buryIdea, resurrectIdea, moveIdeaToProject, clearAllData: clearIdeas } = useIdeasStore()
-  const { projects, tasks, notes, loadWorkspace, createProject, promoteIdea, createTask, moveTask, updateTask, upsertNote, exportData, importData, clearAllData: clearWorkspace } = useWorkspaceStore()
+  const { projects, tasks, notes, loadWorkspace, createProject, promoteIdea, createTask, moveTask, updateTask, upsertNote, deleteNote, exportData, importData, clearAllData: clearWorkspace } = useWorkspaceStore()
   const supabaseEnv = useMemo(() => getSupabaseEnv(), [])
   const authStatus = useAuthStatus()
   const workspaceBootstrap = usePersonalWorkspaceBootstrap(authStatus)
@@ -644,7 +644,7 @@ function App() {
             <KanbanView projects={projects} tasks={tasks} activeProjectId={selectedProjectId} onMoveTask={moveTask} onCreateTask={createTask} onUpdateTask={updateTask} />
           )}
           {activeView === 'notes' && (
-            <NotesView notes={notes} projects={projects} sidebarFilter={sidebarFilter} onSave={upsertNote} />
+            <NotesView notes={notes} projects={projects} sidebarFilter={sidebarFilter} onSave={upsertNote} onDelete={deleteNote} />
           )}
           {activeView === 'graph' && (
             <GraphView ideas={activeIdeas} projects={projects} tasks={tasks} notes={notes} selectedProjectId={selectedProjectId} />
@@ -1332,7 +1332,7 @@ function DraggableTaskCard({ task, index, onMoveTask, onUpdateTask }: { task: Ta
   )
 }
 
-function NotesView({ notes, projects, sidebarFilter, onSave }: { notes: Note[]; projects: Project[]; sidebarFilter: SidebarFilter; onSave: (input: { id?: string; title: string; content: string; linkedProjectId?: string | null; voiceRecordings?: VoiceRecording[] }) => Promise<string | void> }) {
+function NotesView({ notes, projects, sidebarFilter, onSave, onDelete }: { notes: Note[]; projects: Project[]; sidebarFilter: SidebarFilter; onSave: (input: { id?: string; title: string; content: string; linkedProjectId?: string | null; voiceRecordings?: VoiceRecording[] }) => Promise<string | void>; onDelete?: (id: string) => Promise<void> }) {
   const filteredNotes = useMemo(() => {
     if (sidebarFilter.kind === 'all') return notes.filter((n) => !n.linkedProjectId)
     if (sidebarFilter.kind === 'project') return notes.filter((n) => n.linkedProjectId === sidebarFilter.projectId)
@@ -1364,9 +1364,20 @@ function NotesView({ notes, projects, sidebarFilter, onSave }: { notes: Note[]; 
               className={`note-item ${activeId === n.id ? 'active' : ''}`}
               onClick={() => setUserActiveId(n.id)}
             >
-              <div className="note-item-title">{n.title}</div>
-              <div className="note-item-preview">{plainTextPreview(n.content, 50)}...</div>
-              <div className="note-item-date">{new Date(n.updatedAt).toLocaleDateString()}</div>
+              <div className="note-item-main">
+                <div className="note-item-title">{n.title}</div>
+                <div className="note-item-preview">{plainTextPreview(n.content, 50)}...</div>
+                <div className="note-item-date">{new Date(n.updatedAt).toLocaleDateString()}</div>
+              </div>
+              <button
+                type="button"
+                className="note-item-delete"
+                title="Delete note"
+                aria-label={`Delete note: ${n.title}`}
+                onClick={(e) => { e.stopPropagation(); if (window.confirm(`Delete "${n.title}"?`)) onDelete?.(n.id) }}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
             </div>
           ))}
           {filteredNotes.length === 0 ? <p style={{padding: 16, fontSize: 12, color: 'var(--muted)'}}>{emptyMessage}</p> : null}
@@ -1414,6 +1425,7 @@ function plainTextPreview(md: string, max = 50): string {
     .replace(/`([^`]+)`/g, '$1')
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
     .replace(/^- /gm, '')
+    .replace(/<[^>]*>/g, '')
   return text.substring(0, max)
 }
 
@@ -1640,6 +1652,7 @@ function NoteEditor({ activeId, notes, selectedProjectId, onSave }: { activeId?:
         {isRecording && <span className="note-recording-indicator">Recording…</span>}
         <div className="notes-editor-content">
           <input ref={titleRef} className="note-title-input" aria-label="Note title" defaultValue={title} onChange={() => markDirty()} placeholder="Note title" />
+          <hr className="note-title-sep" />
           <div
             ref={editorRef}
             className="note-editor-rich"

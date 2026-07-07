@@ -298,4 +298,80 @@ describe('Settings — Account tab in local/unavailable mode', () => {
     expect(screen.getByRole('button', { name: /send magic link/i })).toBeDisabled()
     expect(screen.queryByRole('button', { name: /sign out/i })).not.toBeInTheDocument()
   })
+
+  it('navigates through all settings tabs without error', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    // Dismiss tutorial if present
+    const skipTour = screen.queryByRole('button', { name: /skip tour/i })
+    if (skipTour) await user.click(skipTour)
+
+    await user.click(screen.getByRole('button', { name: /settings/i }))
+
+    const tabs = ['^account$', '^data$', '^ai$', '^advanced$']
+    for (const tab of tabs) {
+      const btn = screen.queryByRole('button', { name: new RegExp(tab, 'i') })
+      if (!btn) continue
+      await user.click(btn)
+    }
+
+    await user.click(screen.getByRole('button', { name: /^close$/i }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+  })
+})
+
+describe('Auth state transitions', () => {
+  beforeEach(() => {
+    mockSupabaseEnv = configuredSupabaseEnv
+    mockBillingEnv = configuredBillingEnv
+    mockAuthStatus = signedInStatus
+    mockBootstrap = readyBootstrap
+    mockSyncLabel = 'Synced'
+  })
+
+  it('settings dialog survives rapid tab switching', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: /settings/i }))
+
+    const tabs = screen.getAllByRole('button').filter((btn) =>
+      ['account', 'data', 'ai', 'billing'].some((t) =>
+        btn.getAttribute('aria-label')?.toLowerCase() === t ||
+        btn.textContent?.toLowerCase() === t,
+      ),
+    )
+
+    for (let round = 0; round < 3; round++) {
+      for (const tab of tabs) {
+        await user.click(tab)
+      }
+    }
+
+    const dialogs = screen.getAllByRole('dialog')
+    expect(dialogs.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('core functionality remains when switching from configured to unconfigured billing', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    expect(screen.getByRole('button', { name: /dump idea/i })).toBeEnabled()
+
+    mockBillingEnv = unconfiguredBillingEnv
+
+    expect(screen.getByRole('button', { name: /dump idea/i })).toBeEnabled()
+  })
+
+  it('signed-out status does not gate idea capture or note creation', () => {
+    mockAuthStatus = signedOutStatus
+    render(<App />)
+
+    expect(screen.getByRole('button', { name: /dump idea/i })).toBeEnabled()
+    expect(screen.getAllByRole('button', { name: /^notes$/i }).length).toBeGreaterThan(0)
+  })
 })

@@ -70,4 +70,63 @@ describe('logger', () => {
     subscribeLogs(() => { throw new Error('nope') })
     expect(() => logger.info('test', 'still works')).not.toThrow()
   })
+
+  it('handles unicode and emoji in messages', () => {
+    logger.info('i18n', 'hello 世界 🌍 привет', { emoji: '🚀' })
+    const entry = getLogs()[0]
+    expect(entry.message).toBe('hello 世界 🌍 привет')
+    expect(entry.data?.emoji).toBe('🚀')
+  })
+
+  it('handles very large data payloads without throwing', () => {
+    const big = { arr: new Array(10_000).fill('x').join('') }
+    expect(() => logger.warn('big', 'large payload', big)).not.toThrow()
+    const logs = getLogs()
+    expect(logs).toHaveLength(1)
+    expect(typeof logs[0].data?.arr).toBe('string')
+    expect((logs[0].data?.arr as string).length).toBe(10_000)
+  })
+
+  it('handles null, undefined, and Error in data', () => {
+    logger.error('edges', 'null data', null)
+    logger.info('edges', 'no data')
+    logger.warn('edges', 'error obj', new Error('fail'))
+    const logs = getLogs()
+    // logs are most-recent-first: warn, info, error
+    expect(logs[0].level).toBe('warn')
+    expect(logs[0].data?.message).toBe('fail')
+    expect(logs[1].level).toBe('info')
+    expect(logs[1].data).toBeUndefined()
+    expect(logs[2].level).toBe('error')
+    expect(logs[2].data).toBeNull()
+  })
+
+  it('survives rapid subscribe / unsubscribe cycling', () => {
+    const fns = new Array(100).fill(null).map(() => vi.fn())
+    const unsubs = fns.map((fn) => subscribeLogs(fn))
+    unsubs.forEach((u) => u())
+    expect(() => logger.info('stress', 'after 100 cycle')).not.toThrow()
+  })
+
+  it('re-entrant subscribe inside listener does not break iteration', () => {
+    const inner = vi.fn()
+    subscribeLogs(() => {
+      subscribeLogs(inner)
+    })
+    logger.info('re', 'entrant')
+    expect(inner).toHaveBeenCalled()
+  })
+
+  it('concurrent-style logging from multiple sources interleaved', () => {
+    const sources = ['ui', 'api', 'db', 'sync', 'auth']
+    for (let round = 0; round < 100; round++) {
+      for (const src of sources) {
+        logger.info(src, `msg-${round}`)
+      }
+    }
+    const logs = getLogs()
+    expect(logs).toHaveLength(500)
+    const uiLogs = logs.filter((l) => l.source === 'ui')
+    expect(uiLogs.length).toBeGreaterThanOrEqual(80)
+  })
 })

@@ -282,6 +282,15 @@ export class BrowserLocalAdapter implements DBAdapter {
     return note
   }
 
+  async deleteNote(id: string): Promise<void> {
+    const notes = await this.readCollection(NOTES_KEY, noteSchema)
+    const existing = notes.find((n) => n.id === id)
+    if (!existing || existing.isDeleted) return
+    const deleted = noteSchema.parse({ ...existing, isDeleted: true, updatedAt: new Date().toISOString(), version: existing.version + 1 })
+    await this.backend.write(NOTES_KEY, notes.map((item) => (item.id === id ? deleted : item)))
+    await this.enqueue('notes', id, 'update', deleted)
+  }
+
   async exportData(): Promise<string> {
     return JSON.stringify(
       {

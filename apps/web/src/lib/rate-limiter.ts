@@ -9,6 +9,7 @@ export type WriteOperation =
   | 'moveTask'
   | 'updateTask'
   | 'upsertNote'
+  | 'deleteNote'
   | 'importData'
   | 'clearAllData'
   | 'workspaceMutation'
@@ -41,6 +42,7 @@ const LIMITS: Record<WriteOperation, RateLimitConfig> = {
   moveTask: { maxRequests: 120, windowMs: 60_000 },
   updateTask: { maxRequests: 120, windowMs: 60_000 },
   upsertNote: { maxRequests: 20, windowMs: 60_000 },
+  deleteNote: { maxRequests: 20, windowMs: 60_000 },
   importData: { maxRequests: 5, windowMs: 600_000 },
   clearAllData: { maxRequests: 3, windowMs: 600_000 },
   workspaceMutation: { maxRequests: 20, windowMs: 60_000 },

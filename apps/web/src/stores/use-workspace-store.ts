@@ -18,6 +18,7 @@ interface WorkspaceState {
   moveTask: (id: string, columnId: TaskColumn) => Promise<void>
   updateTask: (id: string, input: UpdateTaskInput) => Promise<void>
   upsertNote: (input: UpsertNoteInput) => Promise<string>
+  deleteNote: (id: string) => Promise<void>
   exportData: () => Promise<string>
   importData: (payload: string) => Promise<void>
   clearAllData: () => Promise<void>
@@ -64,6 +65,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const exists = notes.some((item) => item.id === note.id)
     set({ notes: exists ? notes.map((item) => (item.id === note.id ? note : item)) : [note, ...notes] })
     return note.id
+  },
+  deleteNote: async (id) => {
+    assertWriteAllowed('deleteNote')
+    await getDb().deleteNote(id)
+    set({ notes: get().notes.filter((n) => n.id !== id) })
   },
   exportData: async () => getDb().exportData(),
   importData: async (payload) => {
