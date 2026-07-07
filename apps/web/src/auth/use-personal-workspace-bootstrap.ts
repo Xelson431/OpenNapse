@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AuthStatus } from './use-auth-status'
 import { ensurePersonalWorkspaceForCurrentSession } from './ensure-personal-workspace'
+import { logger } from '../lib/logger'
 
 const BOOTSTRAP_TIMEOUT_MS = 15_000
 
@@ -40,6 +41,8 @@ export function usePersonalWorkspaceBootstrap(authStatus: AuthStatus): PersonalW
 
     let active = true
 
+    logger.info('bootstrap', 'Starting workspace bootstrap', { userId })
+
     void (async () => {
       setStatus(bootstrappingStatus)
 
@@ -55,6 +58,7 @@ export function usePersonalWorkspaceBootstrap(authStatus: AuthStatus): PersonalW
         if (!active) return
 
         if (result.ok) {
+          logger.info('bootstrap', 'Workspace bootstrap succeeded', { workspaceId: result.workspaceId, message: result.message })
           setStatus({
             mode: 'ready',
             label: 'Workspace ready',
@@ -64,6 +68,7 @@ export function usePersonalWorkspaceBootstrap(authStatus: AuthStatus): PersonalW
           return
         }
 
+        logger.error('bootstrap', `Bootstrap failed: ${result.message}`)
         setStatus({
           mode: 'failed',
           label: 'Bootstrap failed',
@@ -72,6 +77,7 @@ export function usePersonalWorkspaceBootstrap(authStatus: AuthStatus): PersonalW
       } catch (err) {
         if (!active) return
         const message = err instanceof Error ? err.message : String(err)
+        logger.error('bootstrap', `Bootstrap threw: ${message}`)
         setStatus({
           mode: 'failed',
           label: 'Bootstrap failed',
