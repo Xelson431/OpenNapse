@@ -6,6 +6,7 @@ import { testProviderConnection, listProviderModels, type ListedModel } from './
 import dummyData from './assets/dummy-data.json'
 import { requestMagicLink, signOutOfSupabase, useAuthStatus, type AuthStatus } from './auth/use-auth-status'
 import { usePersonalWorkspaceBootstrap, type PersonalWorkspaceBootstrapStatus } from './auth/use-personal-workspace-bootstrap'
+import { logger, getLogs, clearLogs, serializeLogs, subscribeLogs, type LogEntry, type LogLevel } from './lib/logger'
 import { acceptInvite, inviteWorkspaceMember, listWorkspaceInvites, listWorkspaceMembers, revokeWorkspaceInvite, removeWorkspaceMember, type InviteRole, type WorkspaceInvite, type WorkspaceMember } from './auth/teams'
 import { getTodayBalance, listRecentUsage, type DailyCreditBalance, type UsageEvent } from './auth/credits'
 import { createBillingPortalSession, createCheckoutSession, useSubscriptionStatus } from './auth/billing'
@@ -32,7 +33,7 @@ import { getDb, setDb } from './db/get-db'
 import { createSupabaseCloudAdapter } from './db/supabase-cloud-adapter'
 import { BrowserLocalAdapter } from './db/browser-local-adapter'
 
-type ViewId = 'capture' | 'dashboard' | 'kanban' | 'notes' | 'graph' | 'focus' | 'stats'
+type ViewId = 'capture' | 'dashboard' | 'kanban' | 'notes' | 'graph' | 'focus' | 'stats' | 'logs'
 type ThemeMode = 'light' | 'dark'
 type MentorRole = 'user' | 'assistant' | 'system' | 'action'
 type MentorSession = {
@@ -131,12 +132,13 @@ const views: Array<{ id: ViewId; label: string; icon: IconName; status: FeatureD
   { id: 'graph', label: 'Graph', icon: 'network', status: 'live' },
   { id: 'focus', label: 'Focus', icon: 'target', status: 'live' },
   { id: 'stats', label: 'Stats', icon: 'barChart', status: 'live' },
+  { id: 'logs', label: 'Logs', icon: 'search', status: 'live' },
 ]
 
 function App() {
   const [activeView, setActiveView] = useState<ViewId>(() => {
     const stored = typeof window !== 'undefined' ? localStorage.getItem(ACTIVE_VIEW_STORAGE_KEY) : null
-    const valid: ViewId[] = ['capture', 'dashboard', 'kanban', 'notes', 'graph', 'focus', 'stats']
+    const valid: ViewId[] = ['capture', 'dashboard', 'kanban', 'notes', 'graph', 'focus', 'stats', 'logs']
     return stored && valid.includes(stored as ViewId) ? (stored as ViewId) : 'capture'
   })
   const [sidebarTab, setSidebarTab] = useState<'folders' | 'tags'>('folders')
@@ -220,8 +222,10 @@ function App() {
   const activeUserIdRef = useRef<string | null>(null)
   const [didAutoMigrate, setDidAutoMigrate] = useState(false)
   useEffect(() => {
+    logger.info('adapter', `Auth status: ${authStatus.mode}, Bootstrap: ${workspaceBootstrap.mode}`)
     void (async () => {
       if (authStatus.mode === 'signed-in' && authStatus.userId && workspaceBootstrap?.mode === 'ready' && workspaceBootstrap.workspaceId) {
+        logger.info('adapter', 'Switching to SupabaseCloudAdapter', { workspaceId: workspaceBootstrap.workspaceId })
         if (!didAutoMigrate && activeUserIdRef.current !== authStatus.userId) {
           activeUserIdRef.current = authStatus.userId
           const localAdapter = new BrowserLocalAdapter()
@@ -249,6 +253,7 @@ function App() {
         return
       }
       if (authStatus.mode === 'signed-out' || authStatus.mode === 'unavailable') {
+        logger.info('adapter', 'Switching to BrowserLocalAdapter', { mode: authStatus.mode })
         activeUserIdRef.current = null
         setDidAutoMigrate(false)
         setDb(new BrowserLocalAdapter())
@@ -650,6 +655,7 @@ function App() {
           {activeView === 'stats' && (
             <StatsView ideas={ideas} projects={projects} tasks={tasks} notes={notes} exportData={exportData} importData={importData} reload={async () => { await loadIdeas(); await loadWorkspace() }} onLoadDemoData={async () => { await importData(JSON.stringify(dummyData)); await loadIdeas(); await loadWorkspace() }} onClearAllData={async () => { await clearIdeas(); await clearWorkspace(); await loadIdeas(); await loadWorkspace() }} />
           )}
+          {activeView === 'logs' && <LogViewer />}
           {SHOW_LOCAL_AI_SUGGESTIONS ? <AISuggestions ideas={ideas} projects={projects} tasks={tasks} /> : null}
         </main>
 
@@ -2896,6 +2902,54 @@ function StatusDock({ isOpen, onClose, authStatus, workspaceBootstrap, sync, ide
 }
 
 
+function LogViewer() {
+  const [logs, setLogs] = useState<LogEntry[]>(getLogs)
+  const [filter, setFilter] = useState<LogLevel | 'all'>('all')
+
+  useEffect(() => {
+    const unsub = subscribeLogs((entry) => {
+      setLogs(getLogs())
+    })
+    return unsub
+  }, [])
+
+  const filtered = logs.filter((entry) => filter === 'all' || entry.level === filter)
+
+  return (
+    <div className="log-viewer">
+      <div className="log-viewer-header">
+        <h2>Logs</h2>
+        <div className="log-viewer-controls">
+          <select className="log-filter" value={filter} onChange={(e) => setFilter(e.target.value as LogLevel | 'all')}>
+            <option value="all">All</option>
+            <option value="error">Errors</option>
+            <option value="warn">Warnings</option>
+            <option value="info">Info</option>
+            <option value="debug">Debug</option>
+          </select>
+          <button className="btn btn-secondary btn-compact" onClick={() => { clearLogs(); setLogs([]) }}>Clear</button>
+          <button className="btn btn-secondary btn-compact" onClick={() => { const blob = new Blob([serializeLogs()], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'opennapse-logs.json'; a.click() }}>Export</button>
+        </div>
+      </div>
+      <div className="log-viewer-list">
+        {filtered.length === 0 ? (
+          <p className="empty-state" style={{ padding: '40px 16px', margin: 0 }}>No log entries.</p>
+        ) : (
+          filtered.map((entry) => (
+            <div key={entry.id} className={`log-entry log-entry--${entry.level}`}>
+              <span className="log-entry-time">{new Date(entry.timestamp).toLocaleTimeString()}</span>
+              <span className={`log-entry-level log-entry-level--${entry.level}`}>{entry.level.toUpperCase()}</span>
+              <span className="log-entry-source">{entry.source}</span>
+              <span className="log-entry-message">{entry.message}</span>
+              {entry.data ? <span className="log-entry-data">{JSON.stringify(entry.data)}</span> : null}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
 
 function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, onWorkspaceModeChange, supabaseEnv, authStatus, workspaceBootstrap, aiSettings, onAISettingsChange, sessionKeys, onSessionKeyChange, acceptedPreviewHash, onAcceptPreview, settingsSavedAt, onClearData, onClose }: {
   theme: ThemeMode
@@ -3142,7 +3196,9 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
                         type="button"
                         className="btn btn-ghost"
                         onClick={async () => {
+                          logger.info('auth', 'Signing out')
                           const result = await signOutOfSupabase()
+                          logger.info('auth', `Sign out: ${result.message}`)
                           setAuthActionMessage(result.message)
                         }}
                       >Sign out</button>
@@ -3168,10 +3224,12 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
                         type="button"
                         className="btn btn-secondary"
                         disabled={!canRequestMagicLink}
-                        onClick={async () => {
-                          const result = await requestMagicLink(authEmail)
-                          setAuthActionMessage(result.message)
-                        }}
+                          onClick={async () => {
+                            logger.info('auth', 'Requesting magic link', { email: authEmail })
+                            const result = await requestMagicLink(authEmail)
+                            logger.info('auth', `Magic link: ${result.message}`)
+                            setAuthActionMessage(result.message)
+                          }}
                       >Send magic link</button>
                     </div>
                   </>
