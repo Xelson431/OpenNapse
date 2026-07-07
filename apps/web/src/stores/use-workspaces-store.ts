@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { getDb } from '../db/get-db'
+import { logger } from '../lib/logger'
 import { assertWriteAllowed } from '../lib/rate-limiter'
 import { LOCAL_PERSONAL_WORKSPACE_ID, type CreateWorkspaceInput, type WorkspaceRecord } from '../domain/workspaces'
 
@@ -11,6 +12,7 @@ function readActiveWorkspaceId(): string {
     const stored = localStorage.getItem(ACTIVE_WORKSPACE_KEY)
     return stored && stored.length > 0 ? stored : LOCAL_PERSONAL_WORKSPACE_ID
   } catch {
+    logger.warn('local', 'readActiveWorkspaceId failed, falling back to default')
     return LOCAL_PERSONAL_WORKSPACE_ID
   }
 }
@@ -19,7 +21,7 @@ function writeActiveWorkspaceId(workspaceId: string): void {
   try {
     localStorage.setItem(ACTIVE_WORKSPACE_KEY, workspaceId)
   } catch {
-    // ignore storage write failures
+    logger.warn('local', 'writeActiveWorkspaceId failed, unable to persist active workspace')
   }
 }
 
