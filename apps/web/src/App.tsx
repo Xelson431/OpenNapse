@@ -2559,7 +2559,7 @@ function PromotionModal({ idea, onClose, onSubmit }: {
 function NavRail({ activeTab, onTabChange, ideaCount, theme, onToggleTheme, onOpenSettings }: { activeTab: ViewId; onTabChange: (view: ViewId) => void; ideaCount: number; theme: ThemeMode; onToggleTheme: () => void; onOpenSettings: () => void }) {
   return (
     <nav className="nav-rail" role="navigation" aria-label="Main navigation">
-      <img className="nav-rail-logo" src="/icons8-brain-liquid-glass-96.png" alt="OpenNapse" title="OpenNapse" />
+      <img className="nav-rail-logo" src="/favicon.svg" alt="OpenNapse" title="OpenNapse" />
       <div className="nav-rail-items">
         {views.map(tab => (
           <button
