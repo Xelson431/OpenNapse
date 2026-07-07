@@ -1,12 +1,24 @@
 {
   "name": "OpenNapse",
-  "short_name": "BrainMap",
-  "description": "A secure local-first idea-to-project cockpit.",
+  "short_name": "OpenNapse",
+  "description": "A secure local-first idea-to-project workspace.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f4f4f5",
   "theme_color": "#ffffff",
   "icons": [
+    {
+      "src": "/icons8-brain-liquid-glass-96.png",
+      "sizes": "96x96",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons8-brain-liquid-glass-32.png",
+      "sizes": "32x32",
+      "type": "image/png",
+      "purpose": "any"
+    },
     {
       "src": "/favicon.svg",
       "sizes": "any",
