@@ -22,8 +22,8 @@ export const workspaceRecordSchema = z.object({
   type: workspaceTypeSchema,
   name: z.string().trim().min(1).max(80),
   ownerUserId: z.string().min(1),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  createdAt: z.string().datetime({ offset: true }),
+  updatedAt: z.string().datetime({ offset: true }),
   isDefault: z.boolean().default(false),
 })
 

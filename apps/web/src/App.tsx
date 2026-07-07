@@ -1555,7 +1555,7 @@ function NoteEditor({ activeId, notes, projects, selectedProjectId, onSave }: { 
           </button>
         </div>
         {isRecording && <span className="note-recording-indicator">Recording…</span>}
-        <form className="notes-editor-content" onSubmit={async (event) => { event.preventDefault(); if (submitting) return; setSubmitting(true); setSaveError(''); try { await onSave({ id: activeId, title, content, linkedProjectId: linkedProjectId || null, voiceRecordings: recordings }) } catch (err) { setSaveError(err instanceof Error ? err.message : String(err)) } finally { setSubmitting(false) } }}>
+        <form className="notes-editor-content" onSubmit={async (event) => { event.preventDefault(); if (submitting) return; setSubmitting(true); setSaveError(''); try { await onSave({ id: activeId, title, content, linkedProjectId: linkedProjectId || null, voiceRecordings: recordings }) } catch (err) { const msg = err instanceof Error ? err.message : String(err); logger.error('note', 'Save note failed', { id: activeId, error: msg }); setSaveError(msg) } finally { setSubmitting(false) } }}>
           <h3 className="sr-only" style={{display: 'none'}}>Local document</h3>
           <input className="note-title-input" aria-label="Note title" value={title} onChange={(event) => setTitle(event.target.value)} />
           {previewMode ? (

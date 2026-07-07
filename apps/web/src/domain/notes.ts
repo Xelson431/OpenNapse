@@ -7,7 +7,7 @@ export const voiceRecordingSchema = z.object({
   id: z.string().uuid(),
   dataUrl: z.string().max(MAX_VOICE_RECORDING_DATA_URL_LENGTH),
   durationMs: z.number().int().min(0),
-  createdAt: z.string().datetime(),
+  createdAt: z.string().datetime({ offset: true }),
 })
 
 export const noteSchema = z.object({
@@ -21,8 +21,8 @@ export const noteSchema = z.object({
   tags: z.array(z.string().trim().min(1).max(32)).max(24).default([]),
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/).default('#78716C'),
   voiceRecordings: z.array(voiceRecordingSchema).max(10).default([]),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  createdAt: z.string().datetime({ offset: true }),
+  updatedAt: z.string().datetime({ offset: true }),
   version: z.number().int().positive().default(1),
   clientId: z.string().min(1),
   deviceId: z.string().min(1),

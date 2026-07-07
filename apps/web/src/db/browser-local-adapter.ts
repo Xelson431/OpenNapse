@@ -1,3 +1,4 @@
+import { logger } from '../lib/logger'
 import type { DBAdapter, SyncOutboxEntry } from './adapter'
 import { createIdeaDraft, ideaSchema, type CreateIdeaInput, type DraftContext, type Idea } from '../domain/ideas'
 import { createNoteDraft, noteSchema, type Note, type UpsertNoteInput } from '../domain/notes'
@@ -37,7 +38,7 @@ function parseCollection<T>(records: unknown[], schema: ZodType<T>, key: string)
     if (firstError === null) firstError = result.error
   }
   if (rejected > 0) {
-    console.warn(`[OpenNapse] Skipped ${rejected} record(s) from "${key}" that failed schema validation. First error:`, firstError)
+    logger.warn('local', `Skipped ${rejected} record(s) from "${key}" that failed schema validation`, { firstError })
   }
   return valid
 }
@@ -131,12 +132,15 @@ export class BrowserLocalAdapter implements DBAdapter {
       this.readCollection(NOTES_KEY, noteSchema),
     ])
     const byWorkspace = <T extends { workspaceId: string }>(items: T[]) => items.filter((item) => item.workspaceId !== id)
-    await Promise.all([
+    const cascadeResults = await Promise.allSettled([
       this.backend.write(IDEAS_KEY, byWorkspace(ideas)),
       this.backend.write(PROJECTS_KEY, byWorkspace(projects)),
       this.backend.write(TASKS_KEY, byWorkspace(tasks)),
       this.backend.write(NOTES_KEY, byWorkspace(notes)),
     ])
+    for (const r of cascadeResults) {
+      if (r.status === 'rejected') logger.error('local', 'deleteWorkspace cascade write failed', { reason: r.reason })
+    }
   }
 
   private context(): DraftContext {
@@ -294,29 +298,47 @@ export class BrowserLocalAdapter implements DBAdapter {
   }
 
   async importData(payload: string): Promise<void> {
-    const parsed = JSON.parse(payload) as { ideas?: unknown[]; projects?: unknown[]; tasks?: unknown[]; notes?: unknown[] }
-    const ideas = (parsed.ideas ?? []).map((idea) => ideaSchema.parse(idea))
-    const projects = (parsed.projects ?? []).map((project) => projectSchema.parse(project))
-    const tasks = (parsed.tasks ?? []).map((task) => taskSchema.parse(task))
-    const notes = (parsed.notes ?? []).map((note) => noteSchema.parse(note))
+    let parsed: { ideas?: unknown[]; projects?: unknown[]; tasks?: unknown[]; notes?: unknown[] }
+    try {
+      parsed = JSON.parse(payload)
+    } catch (e) {
+      logger.error('local', 'importData JSON parse failed', { error: String(e) })
+      throw new Error('importData: invalid JSON', { cause: e })
+    }
+    let ideas: Idea[], projects: Project[], tasks: Task[], notes: Note[]
+    try {
+      ideas = (parsed.ideas ?? []).map((idea) => ideaSchema.parse(idea))
+      projects = (parsed.projects ?? []).map((project) => projectSchema.parse(project))
+      tasks = (parsed.tasks ?? []).map((task) => taskSchema.parse(task))
+      notes = (parsed.notes ?? []).map((note) => noteSchema.parse(note))
+    } catch (e) {
+      logger.error('local', 'importData schema validation failed', { error: String(e) })
+      throw new Error('importData: schema validation failed', { cause: e })
+    }
 
-    await Promise.all([
+    const importResults = await Promise.allSettled([
       this.backend.write(IDEAS_KEY, ideas),
       this.backend.write(PROJECTS_KEY, projects),
       this.backend.write(TASKS_KEY, tasks),
       this.backend.write(NOTES_KEY, notes),
     ])
+    for (const r of importResults) {
+      if (r.status === 'rejected') logger.error('local', 'importData write failed', { reason: r.reason })
+    }
     await this.enqueue('backup', crypto.randomUUID(), 'insert', { importedAt: new Date().toISOString() })
   }
 
   async clearAllData(): Promise<void> {
-    await Promise.all([
+    const clearResults = await Promise.allSettled([
       this.backend.remove(IDEAS_KEY),
       this.backend.remove(PROJECTS_KEY),
       this.backend.remove(TASKS_KEY),
       this.backend.remove(NOTES_KEY),
       this.backend.remove(OUTBOX_KEY),
     ])
+    for (const r of clearResults) {
+      if (r.status === 'rejected') logger.error('local', 'clearAllData remove failed', { reason: r.reason })
+    }
   }
 
   async listOutbox(): Promise<SyncOutboxEntry[]> {

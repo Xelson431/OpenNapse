@@ -25,6 +25,7 @@ import {
   type CreateWorkspaceInput,
   type WorkspaceRecord,
 } from '../domain/workspaces'
+import { logger } from '../lib/logger'
 import type { DBAdapter, SyncOutboxEntry } from './adapter'
 
 export class CloudAdapterNotSignedInError extends Error {
@@ -76,6 +77,17 @@ function pickNullable<T>(row: UnknownRow, key: string, cast: (value: unknown) =>
   return cast(value)
 }
 
+function normalizeDate(value: unknown, fallback?: string): string {
+  if (typeof value !== 'string') return fallback ?? new Date().toISOString()
+  // Supabase returns timestamptz as ISO strings with microsecond precision and
+  // short offset ("2024-01-15T10:30:00.000000+00") which Zod datetime rejects.
+  return value.replace(/[+-]\d{2}(?::\d{2})?$/, 'Z')
+}
+
+function pickDate(row: UnknownRow, key: string, fallback?: string): string {
+  return normalizeDate(row[key], fallback)
+}
+
 function rowToIdea(row: UnknownRow): Idea {
   return ideaSchema.parse({
     id: pickString(row, 'id'),
@@ -89,10 +101,10 @@ function rowToIdea(row: UnknownRow): Idea {
     color: pickString(row, 'color', '#78716C'),
     energyLevel: pickNullable(row, 'energy_level', (v) => (typeof v === 'number' ? v : null)),
     mood: pickNullable(row, 'mood', (v) => (typeof v === 'string' ? v : null)),
-    createdAt: pickString(row, 'created_at'),
-    updatedAt: pickString(row, 'updated_at'),
-    lastTouchedAt: pickString(row, 'last_touched_at', pickString(row, 'updated_at')),
-    buriedAt: pickNullable(row, 'buried_at', (v) => (typeof v === 'string' ? v : null)),
+    createdAt: pickDate(row, 'created_at'),
+    updatedAt: pickDate(row, 'updated_at'),
+    lastTouchedAt: pickDate(row, 'last_touched_at', pickDate(row, 'updated_at')),
+    buriedAt: pickNullable(row, 'buried_at', (v) => (typeof v === 'string' ? normalizeDate(v) : null)),
     version: pickNumber(row, 'version', 1),
     clientId: pickString(row, 'client_id', 'cloud'),
     deviceId: pickString(row, 'device_id', 'cloud'),
@@ -230,8 +242,8 @@ function rowToNote(row: UnknownRow): Note {
     tags: Array.isArray(row.tags) ? (row.tags as string[]) : [],
     color: pickString(row, 'color', '#78716C'),
     voiceRecordings: Array.isArray(row.voice_recordings) ? (row.voice_recordings as unknown[]) : [],
-    createdAt: pickString(row, 'created_at'),
-    updatedAt: pickString(row, 'updated_at'),
+    createdAt: pickDate(row, 'created_at'),
+    updatedAt: pickDate(row, 'updated_at'),
     version: pickNumber(row, 'version', 1),
     clientId: pickString(row, 'client_id', 'cloud'),
     deviceId: pickString(row, 'device_id', 'cloud'),
@@ -279,15 +291,18 @@ export class SupabaseCloudAdapter implements DBAdapter {
       .from('workspaces')
       .select('id, type, name, owner_user_id, created_at, updated_at')
       .order('created_at', { ascending: true })
-    if (error) throw new Error(`listWorkspaces: ${error.message}`)
+    if (error) {
+      logger.error('cloud', 'listWorkspaces failed', { error: error.message })
+      throw new Error(`listWorkspaces: ${error.message}`)
+    }
     return (data ?? []).map((row) =>
       workspaceRecordSchema.parse({
         id: (row as UnknownRow).id,
         type: (row as UnknownRow).type,
         name: (row as UnknownRow).name,
         ownerUserId: (row as UnknownRow).owner_user_id,
-        createdAt: (row as UnknownRow).created_at,
-        updatedAt: (row as UnknownRow).updated_at,
+        createdAt: normalizeDate((row as UnknownRow).created_at),
+        updatedAt: normalizeDate((row as UnknownRow).updated_at),
         isDefault: false,
       }),
     )
@@ -305,14 +320,19 @@ export class SupabaseCloudAdapter implements DBAdapter {
       created_at: record.createdAt,
       updated_at: record.updatedAt,
     })
-    if (error) throw new Error(`createWorkspace: ${error.message}`)
-    // Owner membership row.
-    await client.from('workspace_members').insert({
+    if (error) {
+      logger.error('cloud', 'createWorkspace failed', { error: error.message })
+      throw new Error(`createWorkspace: ${error.message}`)
+    }
+    const { error: memberError } = await client.from('workspace_members').insert({
       workspace_id: record.id,
       user_id: record.ownerUserId,
       role: 'owner',
       status: 'active',
     })
+    if (memberError) {
+      logger.error('cloud', 'createWorkspace membership insert failed', { error: memberError.message })
+    }
     return record
   }
 
@@ -325,14 +345,17 @@ export class SupabaseCloudAdapter implements DBAdapter {
       .eq('id', id)
       .select('id, type, name, owner_user_id, created_at, updated_at')
       .single()
-    if (error || !data) throw new Error(`renameWorkspace: ${error?.message ?? 'no row'}`)
+    if (error || !data) {
+      logger.error('cloud', 'renameWorkspace failed', { error: error?.message })
+      throw new Error(`renameWorkspace: ${error?.message ?? 'no row'}`)
+    }
     return workspaceRecordSchema.parse({
       id: (data as UnknownRow).id,
       type: (data as UnknownRow).type,
       name: (data as UnknownRow).name,
       ownerUserId: (data as UnknownRow).owner_user_id,
-      createdAt: (data as UnknownRow).created_at,
-      updatedAt: (data as UnknownRow).updated_at,
+      createdAt: normalizeDate((data as UnknownRow).created_at),
+      updatedAt: normalizeDate((data as UnknownRow).updated_at),
       isDefault: false,
     })
   }
@@ -341,7 +364,10 @@ export class SupabaseCloudAdapter implements DBAdapter {
     const client = this.requireClient('deleteWorkspace')
     await this.requireUserId(client, 'deleteWorkspace')
     const { error } = await client.from('workspaces').delete().eq('id', id)
-    if (error) throw new Error(`deleteWorkspace: ${error.message}`)
+    if (error) {
+      logger.error('cloud', 'deleteWorkspace failed', { error: error.message })
+      throw new Error(`deleteWorkspace: ${error.message}`)
+    }
   }
 
   private requireWorkspace(): string {
@@ -358,7 +384,10 @@ export class SupabaseCloudAdapter implements DBAdapter {
   private async requireUserId(client: SupabaseClient, operation: string): Promise<string> {
     if (this.cachedUserId) return this.cachedUserId
     const { data, error } = await client.auth.getUser()
-    if (error || !data.user) throw new CloudAdapterNotSignedInError(operation)
+    if (error || !data.user) {
+      logger.warn('cloud', `requireUserId failed for ${operation}`, { error: error?.message })
+      throw new CloudAdapterNotSignedInError(operation)
+    }
     this.cachedUserId = data.user.id
     return this.cachedUserId
   }
@@ -378,7 +407,10 @@ export class SupabaseCloudAdapter implements DBAdapter {
       .eq('workspace_id', this.requireWorkspace())
       .eq('is_deleted', false)
       .order('updated_at', { ascending: false })
-    if (error) throw new Error(`listIdeas: ${error.message}`)
+    if (error) {
+      logger.error('cloud', 'listIdeas failed', { error: error.message })
+      throw new Error(`listIdeas: ${error.message}`)
+    }
     return (data ?? []).map((row) => rowToIdea(row as UnknownRow))
   }
 
@@ -387,7 +419,10 @@ export class SupabaseCloudAdapter implements DBAdapter {
     const context = await this.draftContext('createIdea')
     const idea = createIdeaDraft(input, context)
     const { error } = await client.from('ideas').insert(ideaToRow(idea))
-    if (error) throw new Error(`createIdea: ${error.message}`)
+    if (error) {
+      logger.error('cloud', 'createIdea failed', { error: error.message })
+      throw new Error(`createIdea: ${error.message}`)
+    }
     return idea
   }
 
@@ -413,7 +448,10 @@ export class SupabaseCloudAdapter implements DBAdapter {
       .eq('workspace_id', this.requireWorkspace())
       .select('*')
       .single()
-    if (error || !data) throw new Error(`patchIdea: ${error?.message ?? 'no row'}`)
+    if (error || !data) {
+      logger.error('cloud', 'patchIdea failed', { error: error?.message, id })
+      throw new Error(`patchIdea: ${error?.message ?? 'no row'}`)
+    }
     return rowToIdea(data as UnknownRow)
   }
 
@@ -426,7 +464,10 @@ export class SupabaseCloudAdapter implements DBAdapter {
       .eq('workspace_id', this.requireWorkspace())
       .eq('is_deleted', false)
       .order('updated_at', { ascending: false })
-    if (error) throw new Error(`listProjects: ${error.message}`)
+    if (error) {
+      logger.error('cloud', 'listProjects failed', { error: error.message })
+      throw new Error(`listProjects: ${error.message}`)
+    }
     return (data ?? []).map((row) => rowToProject(row as UnknownRow))
   }
 
@@ -435,7 +476,10 @@ export class SupabaseCloudAdapter implements DBAdapter {
     const context = await this.draftContext('createProject')
     const project = createProjectDraft(input, context)
     const { error } = await client.from('projects').insert(projectToRow(project))
-    if (error) throw new Error(`createProject: ${error.message}`)
+    if (error) {
+      logger.error('cloud', 'createProject failed', { error: error.message })
+      throw new Error(`createProject: ${error.message}`)
+    }
     return project
   }
 
@@ -448,7 +492,10 @@ export class SupabaseCloudAdapter implements DBAdapter {
       .eq('workspace_id', this.requireWorkspace())
       .eq('is_deleted', false)
       .order('sort_order', { ascending: true })
-    if (error) throw new Error(`listTasks: ${error.message}`)
+    if (error) {
+      logger.error('cloud', 'listTasks failed', { error: error.message })
+      throw new Error(`listTasks: ${error.message}`)
+    }
     return (data ?? []).map((row) => rowToTask(row as UnknownRow))
   }
 
@@ -461,7 +508,10 @@ export class SupabaseCloudAdapter implements DBAdapter {
       .eq('workspace_id', this.requireWorkspace())
       .eq('is_deleted', false)
       .order('updated_at', { ascending: false })
-    if (error) throw new Error(`listNotes: ${error.message}`)
+    if (error) {
+      logger.error('cloud', 'listNotes failed', { error: error.message })
+      throw new Error(`listNotes: ${error.message}`)
+    }
     return (data ?? []).map((row) => rowToNote(row as UnknownRow))
   }
 
@@ -470,7 +520,10 @@ export class SupabaseCloudAdapter implements DBAdapter {
     const context = await this.draftContext('createTask')
     const task = createTaskDraft(input, context)
     const { error } = await client.from('tasks').insert(taskToRow(task))
-    if (error) throw new Error(`createTask: ${error.message}`)
+    if (error) {
+      logger.error('cloud', 'createTask failed', { error: error.message })
+      throw new Error(`createTask: ${error.message}`)
+    }
     return task
   }
 
@@ -481,10 +534,16 @@ export class SupabaseCloudAdapter implements DBAdapter {
     const task = createFirstStepTask(project)
 
     const { error: projectError } = await client.from('projects').insert(projectToRow(project))
-    if (projectError) throw new Error(`promoteIdea(project): ${projectError.message}`)
+    if (projectError) {
+      logger.error('cloud', 'promoteIdea project insert failed', { error: projectError.message })
+      throw new Error(`promoteIdea(project): ${projectError.message}`)
+    }
 
     const { error: taskError } = await client.from('tasks').insert(taskToRow(task))
-    if (taskError) throw new Error(`promoteIdea(task): ${taskError.message}`)
+    if (taskError) {
+      logger.error('cloud', 'promoteIdea task insert failed', { error: taskError.message })
+      throw new Error(`promoteIdea(task): ${taskError.message}`)
+    }
 
     const idea = await this.patchIdea(input.idea.id, {
       status: 'project',
@@ -505,7 +564,10 @@ export class SupabaseCloudAdapter implements DBAdapter {
       .eq('id', id)
       .eq('workspace_id', this.requireWorkspace())
       .single()
-    if (readError || !existing) throw new Error(`moveTask: ${readError?.message ?? 'not found'}`)
+    if (readError || !existing) {
+      logger.error('cloud', 'moveTask read failed', { error: readError?.message, id })
+      throw new Error(`moveTask: ${readError?.message ?? 'not found'}`)
+    }
     const nextVersion = (existing.version as number) + 1
     const { data, error } = await client
       .from('tasks')
@@ -521,7 +583,10 @@ export class SupabaseCloudAdapter implements DBAdapter {
       .eq('workspace_id', this.requireWorkspace())
       .select('*')
       .single()
-    if (error || !data) throw new Error(`moveTask: ${error?.message ?? 'no row'}`)
+    if (error || !data) {
+      logger.error('cloud', 'moveTask update failed', { error: error?.message, id })
+      throw new Error(`moveTask: ${error?.message ?? 'no row'}`)
+    }
     return rowToTask(data as UnknownRow)
   }
 
@@ -534,7 +599,10 @@ export class SupabaseCloudAdapter implements DBAdapter {
       .eq('id', id)
       .eq('workspace_id', this.requireWorkspace())
       .single()
-    if (readError || !existing) throw new Error(`updateTask: ${readError?.message ?? 'not found'}`)
+    if (readError || !existing) {
+      logger.error('cloud', 'updateTask read failed', { error: readError?.message, id })
+      throw new Error(`updateTask: ${readError?.message ?? 'not found'}`)
+    }
     const patch: Record<string, unknown> = {
       version: ((existing.version as number | null) ?? 1) + 1,
       updated_at: new Date().toISOString(),
@@ -548,7 +616,10 @@ export class SupabaseCloudAdapter implements DBAdapter {
       .eq('workspace_id', this.requireWorkspace())
       .select('*')
       .single()
-    if (error || !data) throw new Error(`updateTask: ${error?.message ?? 'no row'}`)
+    if (error || !data) {
+      logger.error('cloud', 'updateTask patch failed', { error: error?.message, id })
+      throw new Error(`updateTask: ${error?.message ?? 'no row'}`)
+    }
     return rowToTask(data as UnknownRow)
   }
 
@@ -558,7 +629,10 @@ export class SupabaseCloudAdapter implements DBAdapter {
     const draft = createNoteDraft(input, context)
     const note: Note = input.id ? { ...draft, id: input.id } : draft
     const { data, error } = await client.from('notes').upsert(noteToRow(note)).select('*').single()
-    if (error || !data) throw new Error(`upsertNote: ${error?.message ?? 'no row'}`)
+    if (error || !data) {
+      logger.error('cloud', 'upsertNote failed', { error: error?.message, title: input.title })
+      throw new Error(`upsertNote: ${error?.message ?? 'no row'}`)
+    }
     return rowToNote(data as UnknownRow)
   }
 
@@ -579,11 +653,12 @@ export class SupabaseCloudAdapter implements DBAdapter {
   async importData(payload: string): Promise<void> {
     const client = this.requireClient('importData')
     const context = await this.draftContext('importData')
-    const parsed = JSON.parse(payload) as {
-      ideas?: unknown[]
-      projects?: unknown[]
-      tasks?: unknown[]
-      notes?: unknown[]
+    let parsed: { ideas?: unknown[]; projects?: unknown[]; tasks?: unknown[]; notes?: unknown[] }
+    try {
+      parsed = JSON.parse(payload)
+    } catch (e) {
+      logger.error('cloud', 'importData JSON parse failed', { error: String(e) })
+      throw new Error(`importData: invalid JSON`, { cause: e })
     }
 
     const ideas = (parsed.ideas ?? []).map((value) =>
@@ -601,31 +676,48 @@ export class SupabaseCloudAdapter implements DBAdapter {
 
     if (projects.length > 0) {
       const { error } = await client.from('projects').upsert(projects.map(projectToRow))
-      if (error) throw new Error(`importData(projects): ${error.message}`)
+      if (error) {
+      logger.error('cloud', 'importData projects failed', { error: error.message })
+      throw new Error(`importData(projects): ${error.message}`)
+    }
     }
     if (ideas.length > 0) {
       const { error } = await client.from('ideas').upsert(ideas.map(ideaToRow))
-      if (error) throw new Error(`importData(ideas): ${error.message}`)
+      if (error) {
+      logger.error('cloud', 'importData ideas failed', { error: error.message })
+      throw new Error(`importData(ideas): ${error.message}`)
+    }
     }
     if (tasks.length > 0) {
       const { error } = await client.from('tasks').upsert(tasks.map(taskToRow))
-      if (error) throw new Error(`importData(tasks): ${error.message}`)
+      if (error) {
+      logger.error('cloud', 'importData tasks failed', { error: error.message })
+      throw new Error(`importData(tasks): ${error.message}`)
+    }
     }
     if (notes.length > 0) {
       const { error } = await client.from('notes').upsert(notes.map(noteToRow))
-      if (error) throw new Error(`importData(notes): ${error.message}`)
+      if (error) {
+      logger.error('cloud', 'importData notes failed', { error: error.message })
+      throw new Error(`importData(notes): ${error.message}`)
+    }
     }
   }
 
   async clearAllData(): Promise<void> {
     const client = this.requireClient('clearAllData')
     const workspaceId = this.requireWorkspace()
-    await Promise.all([
+    const results = await Promise.allSettled([
       client.from('ideas').delete().eq('workspace_id', workspaceId),
       client.from('projects').delete().eq('workspace_id', workspaceId),
       client.from('tasks').delete().eq('workspace_id', workspaceId),
       client.from('notes').delete().eq('workspace_id', workspaceId),
     ])
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        logger.error('cloud', 'clearAllData delete failed', { reason: result.reason })
+      }
+    }
   }
 
   async listOutbox(): Promise<SyncOutboxEntry[]> {
