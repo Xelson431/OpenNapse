@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { logger, getLogs, clearLogs, subscribeLogs, serializeLogs } from './logger'
 
 beforeEach(() => {
@@ -75,7 +75,7 @@ describe('logger', () => {
     logger.info('i18n', 'hello 世界 🌍 привет', { emoji: '🚀' })
     const entry = getLogs()[0]
     expect(entry.message).toBe('hello 世界 🌍 привет')
-    expect(entry.data?.emoji).toBe('🚀')
+    expect((entry.data as Record<string, unknown>)?.emoji).toBe('🚀')
   })
 
   it('handles very large data payloads without throwing', () => {
@@ -83,8 +83,8 @@ describe('logger', () => {
     expect(() => logger.warn('big', 'large payload', big)).not.toThrow()
     const logs = getLogs()
     expect(logs).toHaveLength(1)
-    expect(typeof logs[0].data?.arr).toBe('string')
-    expect((logs[0].data?.arr as string).length).toBe(10_000)
+    expect(typeof (logs[0].data as Record<string, string>)?.arr).toBe('string')
+    expect((logs[0].data as Record<string, string>)?.arr.length).toBe(10_000)
   })
 
   it('handles null, undefined, and Error in data', () => {
@@ -94,7 +94,7 @@ describe('logger', () => {
     const logs = getLogs()
     // logs are most-recent-first: warn, info, error
     expect(logs[0].level).toBe('warn')
-    expect(logs[0].data?.message).toBe('fail')
+    expect((logs[0].data as Record<string, string>)?.message).toBe('fail')
     expect(logs[1].level).toBe('info')
     expect(logs[1].data).toBeUndefined()
     expect(logs[2].level).toBe('error')

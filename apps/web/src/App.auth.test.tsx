@@ -356,8 +356,7 @@ describe('Auth state transitions', () => {
     expect(dialogs.length).toBeGreaterThanOrEqual(1)
   })
 
-  it('core functionality remains when switching from configured to unconfigured billing', async () => {
-    const user = userEvent.setup()
+  it('core functionality remains when switching from configured to unconfigured billing', () => {
     render(<App />)
 
     expect(screen.getByRole('button', { name: /dump idea/i })).toBeEnabled()
