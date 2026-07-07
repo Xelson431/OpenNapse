@@ -39,8 +39,6 @@ export function usePersonalWorkspaceBootstrap(authStatus: AuthStatus): PersonalW
     if (attemptedForUserId.current === userId) return
     attemptedForUserId.current = userId
 
-    let active = true
-
     logger.info('bootstrap', 'Starting workspace bootstrap', { userId })
 
     void (async () => {
@@ -54,8 +52,6 @@ export function usePersonalWorkspaceBootstrap(authStatus: AuthStatus): PersonalW
           }),
           timeout(BOOTSTRAP_TIMEOUT_MS),
         ])
-
-        if (!active) return
 
         if (result.ok) {
           logger.info('bootstrap', 'Workspace bootstrap succeeded', { workspaceId: result.workspaceId, message: result.message })
@@ -75,7 +71,6 @@ export function usePersonalWorkspaceBootstrap(authStatus: AuthStatus): PersonalW
           description: result.message,
         })
       } catch (err) {
-        if (!active) return
         const message = err instanceof Error ? err.message : String(err)
         logger.error('bootstrap', `Bootstrap threw: ${message}`)
         setStatus({
@@ -87,11 +82,7 @@ export function usePersonalWorkspaceBootstrap(authStatus: AuthStatus): PersonalW
         })
       }
     })()
-
-    return () => {
-      active = false
-    }
-  }, [authStatus])
+  }, [authStatus.mode, authStatus.userId])
 
   if (authStatus.mode !== 'signed-in' || !authStatus.userId) return idleStatus
   return status ?? bootstrappingStatus

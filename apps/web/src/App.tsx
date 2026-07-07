@@ -262,7 +262,7 @@ function App() {
         await loadWorkspace()
       }
     })()
-  }, [authStatus, workspaceBootstrap, activeWorkspaceId, loadIdeas, loadWorkspace, loadWorkspaces, didAutoMigrate])
+  }, [authStatus.mode, authStatus.userId, workspaceBootstrap, activeWorkspaceId, loadIdeas, loadWorkspace, loadWorkspaces, didAutoMigrate])
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
