@@ -7,39 +7,9 @@ import { workspaceRecordSchema } from '../domain/workspaces'
 import { loadAISettings } from '../ai/provider'
 import { BrowserLocalAdapter } from '../db/browser-local-adapter'
 import { LocalStorageBackend } from '../db/storage-backend'
+import { renderMarkdown } from '../lib/note-html'
 
 const ctx = { deviceId: 'device-test', workspaceId: 'local-personal-workspace', createdBy: 'user-test' }
-
-// ---------------------------------------------------------------------------
-// renderMarkdown + escapeHtml — reused from App.tsx
-// ---------------------------------------------------------------------------
-function escapeHtml(text: string): string {
-  return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
-}
-
-function sanitizeMarkdownHref(href: string): string {
-  const trimmed = href.trim()
-  const normalized = Array.from(trimmed).filter((char) => char.charCodeAt(0) > 0x20 && char.charCodeAt(0) !== 0x7f).join('').toLowerCase()
-  if (
-    normalized.startsWith('javascript:')
-    || normalized.startsWith('data:')
-    || normalized.startsWith('vbscript:')
-    || normalized.startsWith('file:')
-  ) {
-    return '#'
-  }
-  return trimmed || '#'
-}
-
-function renderMarkdown(md: string): string {
-  return escapeHtml(md)
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, href: string) => `<a href="${sanitizeMarkdownHref(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`)
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
-    .replace(/(<li>.+<\/li>\n?)+/g, '<ul>$&</ul>')
-}
 
 // ---------------------------------------------------------------------------
 // 1. XSS boundary tests

@@ -3,7 +3,16 @@ import type { AuthStatus } from '../auth/use-auth-status'
 
 export type SyncStatus = 'local-only' | 'synced' | 'syncing' | 'offline'
 
-export function useSyncStatus(authStatus?: AuthStatus, workspaceBootstrap?: { mode: string; description?: string }) {
+export type CloudConnectionStatus = {
+  mode: 'idle' | 'connecting' | 'ready' | 'failed'
+  description?: string
+}
+
+export function useSyncStatus(
+  authStatus?: AuthStatus,
+  workspaceBootstrap?: { mode: string; description?: string },
+  cloudConnection?: CloudConnectionStatus,
+) {
   const env = getSupabaseEnv()
 
   if (authStatus?.mode === 'signed-in') {
@@ -23,10 +32,26 @@ export function useSyncStatus(authStatus?: AuthStatus, workspaceBootstrap?: { mo
         syncNow: async () => undefined,
       }
     }
+    if (cloudConnection?.mode === 'failed') {
+      return {
+        status: 'offline' as SyncStatus,
+        label: 'Sync failed',
+        description: cloudConnection.description ?? 'Cloud migration or adapter setup failed.',
+        syncNow: async () => undefined,
+      }
+    }
+    if (cloudConnection?.mode === 'connecting' || cloudConnection?.mode === 'idle' || !cloudConnection) {
+      return {
+        status: 'syncing' as SyncStatus,
+        label: 'Connecting…',
+        description: cloudConnection?.description ?? workspaceBootstrap?.description ?? 'Connecting cloud workspace…',
+        syncNow: async () => undefined,
+      }
+    }
     return {
       status: 'synced' as SyncStatus,
       label: 'Synced',
-      description: workspaceBootstrap?.description ?? 'Connected.',
+      description: cloudConnection.description ?? workspaceBootstrap?.description ?? 'Connected.',
       syncNow: async () => undefined,
     }
   }

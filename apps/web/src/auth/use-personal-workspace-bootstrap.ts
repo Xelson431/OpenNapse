@@ -82,7 +82,7 @@ export function usePersonalWorkspaceBootstrap(authStatus: AuthStatus): PersonalW
         })
       }
     })()
-  }, [authStatus.mode, authStatus.userId])
+  }, [authStatus.mode, authStatus.userId, authStatus.email])
 
   if (authStatus.mode !== 'signed-in' || !authStatus.userId) return idleStatus
   return status ?? bootstrappingStatus

@@ -25,13 +25,15 @@ import { calculateStats } from './domain/stats'
 import { taskColumns, type CreateTaskInput, type Task, type TaskColumn, type UpdateTaskInput } from './domain/tasks'
 import { LOCAL_PERSONAL_WORKSPACE_ID, createActiveWorkspace, createActiveWorkspaceFromRecord, workspaceModes, type ActiveWorkspace, type WorkspaceMode } from './domain/workspaces'
 import { IDEA_DRAG_MIME, hasIdeaDragPayload, readIdeaDragPayload } from './lib/drag'
-import { useSyncStatus } from './sync/use-sync'
+import { useSyncStatus, type CloudConnectionStatus } from './sync/use-sync'
+import { hasExportedContent, migrateLocalDataToCloud } from './sync/cloud-migration'
 import { useIdeasStore } from './stores/use-ideas-store'
 import { toPromoteInput, useWorkspaceStore } from './stores/use-workspace-store'
 import { useWorkspacesStore } from './stores/use-workspaces-store'
-import { getDb, setDb } from './db/get-db'
+import { setDb } from './db/get-db'
 import { createSupabaseCloudAdapter } from './db/supabase-cloud-adapter'
 import { BrowserLocalAdapter } from './db/browser-local-adapter'
+import { buildCodeBlockHtml, prepareNoteContent, sanitizeNoteHref, sanitizeNoteHtml } from './lib/note-html'
 
 type ViewId = 'capture' | 'dashboard' | 'kanban' | 'notes' | 'graph' | 'focus' | 'stats' | 'logs'
 type ThemeMode = 'light' | 'dark'
@@ -83,24 +85,6 @@ const CLOUD_MIGRATION_DISMISSED_STORAGE_KEY = 'OpenNapse:v0:cloud-migration-dism
 const ACTIVE_VIEW_STORAGE_KEY = 'OpenNapse:v0:active-view'
 const MOBILE_MEDIA_QUERY = '(max-width: 640px)'
 const ENABLE_TEAM_WORKSPACES = import.meta.env.VITE_ENABLE_TEAM_WORKSPACES === 'true'
-
-function countExportPayload(payload: string): LocalCloudMigrationPrompt['counts'] {
-  try {
-    const parsed = JSON.parse(payload) as { ideas?: unknown[]; projects?: unknown[]; tasks?: unknown[]; notes?: unknown[] }
-    return {
-      ideas: Array.isArray(parsed.ideas) ? parsed.ideas.length : 0,
-      projects: Array.isArray(parsed.projects) ? parsed.projects.length : 0,
-      tasks: Array.isArray(parsed.tasks) ? parsed.tasks.length : 0,
-      notes: Array.isArray(parsed.notes) ? parsed.notes.length : 0,
-    }
-  } catch {
-    return { ideas: 0, projects: 0, tasks: 0, notes: 0 }
-  }
-}
-
-function hasExportedContent(counts: LocalCloudMigrationPrompt['counts']): boolean {
-  return counts.ideas + counts.projects + counts.tasks + counts.notes > 0
-}
 
 function isMobileViewport(): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
@@ -186,7 +170,8 @@ function App() {
     () => (activeWorkspaceRecord ? createActiveWorkspaceFromRecord(activeWorkspaceRecord) : createActiveWorkspace(workspaceMode)),
     [activeWorkspaceRecord, workspaceMode],
   )
-  const sync = useSyncStatus(authStatus, workspaceBootstrap)
+  const [cloudConnection, setCloudConnection] = useState<CloudConnectionStatus>({ mode: 'idle' })
+  const sync = useSyncStatus(authStatus, workspaceBootstrap, cloudConnection)
 
   const [mentorSessions, setMentorSessions] = useState<MentorSession[]>(() => {
     const raw = localStorage.getItem(MENTOR_STORAGE_KEY)
@@ -226,43 +211,46 @@ function App() {
     void (async () => {
       if (authStatus.mode === 'signed-in' && authStatus.userId && workspaceBootstrap?.mode === 'ready' && workspaceBootstrap.workspaceId) {
         logger.info('adapter', 'Switching to SupabaseCloudAdapter', { workspaceId: workspaceBootstrap.workspaceId })
-        if (!didAutoMigrate && activeUserIdRef.current !== authStatus.userId) {
-          activeUserIdRef.current = authStatus.userId
-          const localAdapter = new BrowserLocalAdapter()
-          localAdapter.setActiveWorkspaceId(activeWorkspaceId)
-          const [localPayload, cloudIdeas, cloudProjects, cloudTasks, cloudNotes] = await Promise.all([
-            localAdapter.exportData(),
-            getDb().listIdeas(),
-            getDb().listProjects(),
-            getDb().listTasks(),
-            getDb().listNotes(),
-          ])
-          const localCounts = countExportPayload(localPayload)
-          const cloudEmpty = cloudIdeas.length + cloudProjects.length + cloudTasks.length + cloudNotes.length === 0
-          if (cloudEmpty && hasExportedContent(localCounts)) {
-            await getDb().importData(localPayload)
+        setCloudConnection({ mode: 'connecting', description: 'Connecting cloud workspace…' })
+        try {
+          const cloudAdapter = createSupabaseCloudAdapter()
+          cloudAdapter.setActiveWorkspaceId(workspaceBootstrap.workspaceId)
+          if (!didAutoMigrate && activeUserIdRef.current !== authStatus.userId) {
+            activeUserIdRef.current = authStatus.userId
+            const localAdapter = new BrowserLocalAdapter()
+            localAdapter.setActiveWorkspaceId(activeWorkspaceId)
+            const localCounts = await migrateLocalDataToCloud(localAdapter, cloudAdapter)
+            if (hasExportedContent(localCounts)) {
+              logger.info('adapter', 'Cloud migration evaluated', { localCounts })
+            }
+            setDidAutoMigrate(true)
           }
-          setDidAutoMigrate(true)
-        }
 
-        setDb(createSupabaseCloudAdapter())
-        setActiveWorkspace(workspaceBootstrap.workspaceId)
-        await loadWorkspaces()
-        await loadIdeas()
-        await loadWorkspace()
+          setDb(cloudAdapter)
+          setActiveWorkspace(workspaceBootstrap.workspaceId)
+          await loadWorkspaces()
+          await loadIdeas()
+          await loadWorkspace()
+          setCloudConnection({ mode: 'ready', description: 'Cloud workspace connected.' })
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          logger.error('adapter', 'Cloud adapter setup failed', { error: message })
+          setCloudConnection({ mode: 'failed', description: message })
+        }
         return
       }
       if (authStatus.mode === 'signed-out' || authStatus.mode === 'unavailable') {
         logger.info('adapter', 'Switching to BrowserLocalAdapter', { mode: authStatus.mode })
         activeUserIdRef.current = null
         setDidAutoMigrate(false)
+        setCloudConnection({ mode: 'idle', description: 'Using local-only storage.' })
         setDb(new BrowserLocalAdapter())
         await loadWorkspaces()
         await loadIdeas()
         await loadWorkspace()
       }
     })()
-  }, [authStatus.mode, authStatus.userId, workspaceBootstrap, activeWorkspaceId, loadIdeas, loadWorkspace, loadWorkspaces, didAutoMigrate])
+  }, [authStatus.mode, authStatus.userId, workspaceBootstrap, activeWorkspaceId, loadIdeas, loadWorkspace, loadWorkspaces, didAutoMigrate, setActiveWorkspace])
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -1389,35 +1377,6 @@ function NotesView({ notes, projects, sidebarFilter, onSave, onDelete }: { notes
   )
 }
 
-function escapeHtml(text: string): string {
-  return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
-}
-
-function sanitizeMarkdownHref(href: string): string {
-  const trimmed = href.trim()
-  const stripped = trimmed.replace(/[\p{Cf}\u200B-\u200F\u2028-\u202F\uFEFF]/gu, '')
-  const normalized = Array.from(stripped).filter((char) => char.charCodeAt(0) > 0x20 && char.charCodeAt(0) !== 0x7f).join('').toLowerCase()
-  if (
-    normalized.startsWith('javascript:')
-    || normalized.startsWith('data:')
-    || normalized.startsWith('vbscript:')
-    || normalized.startsWith('file:')
-  ) {
-    return '#'
-  }
-  return trimmed || '#'
-}
-
-function renderMarkdown(md: string): string {
-  return escapeHtml(md)
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, href: string) => `<a href="${sanitizeMarkdownHref(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`)
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
-    .replace(/(<li>.+<\/li>\n?)+/g, '<ul>$&</ul>')
-}
-
 function plainTextPreview(md: string, max = 50): string {
   const text = md
     .replace(/\*\*(.+?)\*\*/g, '$1')
@@ -1450,13 +1409,11 @@ function NoteEditor({ activeId, notes, selectedProjectId, onSave }: { activeId?:
 
   // Convert markdown to HTML for existing notes that are in markdown format.
   function prepareContent(raw: string): string {
-    if (!raw) return ''
-    if (/^\s*</.test(raw)) return raw
-    return renderMarkdown(raw)
+    return prepareNoteContent(raw)
   }
 
   function getBodyHtml(): string {
-    return editorRef.current?.innerHTML ?? ''
+    return sanitizeNoteHtml(editorRef.current?.innerHTML ?? '')
   }
 
   // Reset when switching notes
@@ -1556,7 +1513,7 @@ function NoteEditor({ activeId, notes, selectedProjectId, onSave }: { activeId?:
     editorRef.current?.focus()
     const url = prompt('Enter URL:')
     if (url) {
-      document.execCommand('createLink', false, url)
+      document.execCommand('createLink', false, sanitizeNoteHref(url))
       markDirty()
     }
   }, [])
@@ -1630,7 +1587,7 @@ function NoteEditor({ activeId, notes, selectedProjectId, onSave }: { activeId?:
           <button type="button" className="toolbar-btn" title="Italic" onMouseDown={(e) => { e.preventDefault(); execCmd('italic') }}><Icon name="italic" /></button>
           <button type="button" className="toolbar-btn" title="Underline" onMouseDown={(e) => { e.preventDefault(); execCmd('underline') }}><u>U</u></button>
           <div className="toolbar-divider" />
-          <button type="button" className="toolbar-btn" title="Code" onMouseDown={(e) => { e.preventDefault(); execCmd('insertHTML', '<code>' + (window.getSelection()?.toString() ?? '') + '</code>') }}><Icon name="code" /></button>
+          <button type="button" className="toolbar-btn" title="Code" onMouseDown={(e) => { e.preventDefault(); execCmd('insertHTML', buildCodeBlockHtml(window.getSelection()?.toString() ?? '')) }}><Icon name="code" /></button>
           <button type="button" className="toolbar-btn" title="Link" onMouseDown={(e) => { e.preventDefault(); handleLink() }}><Icon name="link" /></button>
           <div className="toolbar-divider" />
           <button type="button" className="toolbar-btn" title="Bullet list" onMouseDown={(e) => { e.preventDefault(); execCmd('insertUnorderedList') }}><Icon name="list" /></button>

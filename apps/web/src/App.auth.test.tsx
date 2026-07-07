@@ -28,6 +28,7 @@ let mockBillingEnv: ResolvedBillingEnv = {
   message: 'Billing wrapper not configured.',
 }
 let mockSyncLabel = 'Local-only'
+let mockSyncDescription = 'Sync status.'
 
 vi.mock('./auth/use-auth-status', () => ({
   useAuthStatus: vi.fn(() => mockAuthStatus),
@@ -45,7 +46,7 @@ vi.mock('./config/env', () => ({
 }))
 
 vi.mock('./sync/use-sync', () => ({
-  useSyncStatus: vi.fn(() => ({ label: mockSyncLabel, description: 'Sync status.', synced: mockSyncLabel === 'Synced' })),
+  useSyncStatus: vi.fn(() => ({ label: mockSyncLabel, description: mockSyncDescription, synced: mockSyncLabel === 'Synced' })),
 }))
 
 const configuredSupabaseEnv: ResolvedSupabaseEnv = {
@@ -112,6 +113,7 @@ const waitingBootstrap: PersonalWorkspaceBootstrapStatus = {
 
 beforeEach(() => {
   localStorage.clear()
+  mockSyncDescription = 'Sync status.'
 })
 
 describe('Signed-in auth flows', () => {
@@ -175,6 +177,15 @@ describe('Signed-in auth flows', () => {
   it('shows synced pill in toolbar when signed in', () => {
     render(<App />)
     expect(screen.getAllByText('Synced').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('shows sync failure state when cloud connection fails', () => {
+    mockSyncLabel = 'Sync failed'
+    mockSyncDescription = 'Cloud migration failed.'
+    render(<App />)
+
+    expect(screen.getAllByText('Sync failed').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('Cloud migration failed.')).toBeInTheDocument()
   })
 
   it('shows credit usage panel when signed in with configured Supabase', async () => {
