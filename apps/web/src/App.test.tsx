@@ -186,7 +186,7 @@ describe('App shell', () => {
     render(<App />)
 
     await user.click(screen.getAllByRole('button', { name: /^notes$/i })[0])
-    expect(screen.getByText('Local document')).toBeInTheDocument()
+    expect(screen.getByLabelText('Local document')).toBeInTheDocument()
 
     await user.click(screen.getAllByRole('button', { name: /^graph$/i })[0])
     expect(screen.getByText('Entity map')).toBeInTheDocument()
