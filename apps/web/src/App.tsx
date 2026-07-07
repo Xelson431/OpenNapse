@@ -2907,7 +2907,7 @@ function LogViewer() {
   const [filter, setFilter] = useState<LogLevel | 'all'>('all')
 
   useEffect(() => {
-    const unsub = subscribeLogs((entry) => {
+    const unsub = subscribeLogs(() => {
       setLogs(getLogs())
     })
     return unsub

@@ -1,6 +1,3 @@
-import { createNoteDraft, type Note } from '../domain/notes'
-import type { DraftContext } from '../domain/ideas'
-
 const MAX_ENTRIES = 500
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
