@@ -174,7 +174,7 @@ describe('Signed-in auth flows', () => {
 
   it('shows synced pill in toolbar when signed in', () => {
     render(<App />)
-    expect(screen.getByText('Synced')).toBeInTheDocument()
+    expect(screen.getAllByText('Synced').length).toBeGreaterThanOrEqual(1)
   })
 
   it('shows credit usage panel when signed in with configured Supabase', async () => {

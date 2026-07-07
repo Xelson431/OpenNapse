@@ -156,6 +156,7 @@ function App() {
   const [isSignInOpen, setIsSignInOpen] = useState(false)
   const [isCreateWorkspaceOpen, setIsCreateWorkspaceOpen] = useState(false)
   const [isMentorOpen, setIsMentorOpen] = useState(() => !isMobileViewport())
+  const [isStatusDockOpen, setIsStatusDockOpen] = useState(false)
   const [promotingIdea, setPromotingIdea] = useState<Idea | null>(null)
   const [creatingProject, setCreatingProject] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -183,8 +184,7 @@ function App() {
     () => (activeWorkspaceRecord ? createActiveWorkspaceFromRecord(activeWorkspaceRecord) : createActiveWorkspace(workspaceMode)),
     [activeWorkspaceRecord, workspaceMode],
   )
-  const rawSync = useSyncStatus(authStatus)
-  const sync = workspaceBootstrap.mode === 'failed' ? { ...rawSync, label: 'Bootstrap failed', description: workspaceBootstrap.description } : rawSync
+  const sync = useSyncStatus(authStatus, workspaceBootstrap)
 
   const [mentorSessions, setMentorSessions] = useState<MentorSession[]>(() => {
     const raw = localStorage.getItem(MENTOR_STORAGE_KEY)
@@ -581,6 +581,15 @@ function App() {
             </button>
             <button
               className="btn btn-ghost"
+              onClick={() => setIsStatusDockOpen((open) => !open)}
+              title={isStatusDockOpen ? 'Hide status' : 'Show status'}
+              aria-label={isStatusDockOpen ? 'Hide status dock' : 'Show status dock'}
+              aria-pressed={isStatusDockOpen}
+            >
+              <Icon name="barChart" />
+            </button>
+            <button
+              className="btn btn-ghost"
               onClick={() => setIsCommandPaletteOpen(true)}
               title="Command palette (⌘K)"
               aria-label="Open command palette"
@@ -643,6 +652,19 @@ function App() {
           )}
           {SHOW_LOCAL_AI_SUGGESTIONS ? <AISuggestions ideas={ideas} projects={projects} tasks={tasks} /> : null}
         </main>
+
+        <StatusDock
+          isOpen={isStatusDockOpen}
+          onClose={() => setIsStatusDockOpen(false)}
+          authStatus={authStatus}
+          workspaceBootstrap={workspaceBootstrap}
+          sync={sync}
+          ideasCount={ideas.length}
+          projectsCount={projects.length}
+          tasksCount={tasks.length}
+          notesCount={notes.length}
+          activeWorkspace={activeWorkspace}
+        />
 
         {SHOW_MENTOR_PANEL ? (
           <MentorPanel
@@ -2766,6 +2788,107 @@ function MentorPanel({
             />
             <button className="btn btn-primary" type="submit">Send</button>
           </form>
+        </div>
+      </div>
+    </aside>
+  )
+}
+
+
+
+
+
+
+function StatusDock({ isOpen, onClose, authStatus, workspaceBootstrap, sync, ideasCount, projectsCount, tasksCount, notesCount, activeWorkspace }: {
+  isOpen: boolean
+  onClose: () => void
+  authStatus: AuthStatus
+  workspaceBootstrap: PersonalWorkspaceBootstrapStatus
+  sync: { label: string; description: string; status: string }
+  ideasCount: number
+  projectsCount: number
+  tasksCount: number
+  notesCount: number
+  activeWorkspace: ActiveWorkspace
+}) {
+  const authColor = authStatus.mode === 'signed-in' ? 'green' : authStatus.mode === 'loading' ? 'yellow' : 'gray'
+  const bootstrapColor = workspaceBootstrap.mode === 'ready' ? 'green' : workspaceBootstrap.mode === 'failed' ? 'red' : workspaceBootstrap.mode === 'bootstrapping' ? 'yellow' : 'gray'
+  const syncColor = sync.status === 'synced' ? 'green' : sync.status === 'offline' ? 'red' : sync.status === 'syncing' ? 'yellow' : 'gray'
+  return (
+    <aside className={`status-dock${isOpen ? ' open' : ''}`}>
+      <div className="status-dock-header">
+        <h3>Status</h3>
+        <button type="button" className="btn btn-ghost" onClick={onClose} aria-label="Close status dock">
+          <Icon name="chevronRight" />
+        </button>
+      </div>
+      <div className="status-dock-body">
+        <div className="status-dock-section">
+          <p className="status-dock-section-title">Account</p>
+          <div className="status-dock-row">
+            <span className="status-dock-row-label">Status</span>
+            <div className="status-dock-row-value" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className={`status-dot status-dot--${authColor}`} />
+              {authStatus.label}
+            </div>
+          </div>
+          {authStatus.mode === 'signed-in' ? (
+            <div className="status-dock-row">
+              <span className="status-dock-row-label">Email</span>
+              <span className="status-dock-row-value">{authStatus.email ?? '—'}</span>
+            </div>
+          ) : null}
+        </div>
+        <div className="status-dock-section">
+          <p className="status-dock-section-title">Workspace</p>
+          <div className="status-dock-row">
+            <span className="status-dock-row-label">Name</span>
+            <span className="status-dock-row-value">{activeWorkspace.name}</span>
+          </div>
+          <div className="status-dock-row">
+            <span className="status-dock-row-label">Mode</span>
+            <span className="status-dock-row-value">{activeWorkspace.badge}</span>
+          </div>
+          <div className="status-dock-row">
+            <span className="status-dock-row-label">Bootstrap</span>
+            <div className="status-dock-row-value" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className={`status-dot status-dot--${bootstrapColor}`} />
+              {workspaceBootstrap.mode === 'ready' ? 'Ready' : workspaceBootstrap.mode === 'failed' ? 'Failed' : workspaceBootstrap.mode === 'bootstrapping' ? 'Connecting' : 'Idle'}
+            </div>
+          </div>
+          {workspaceBootstrap.mode === 'failed' ? (
+            <p style={{ fontSize: 12, color: 'var(--muted)', margin: '2px 0 0' }}>{workspaceBootstrap.description}</p>
+          ) : null}
+        </div>
+        <div className="status-dock-section">
+          <p className="status-dock-section-title">Sync</p>
+          <div className="status-dock-row">
+            <span className="status-dock-row-label">Connection</span>
+            <div className="status-dock-row-value" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className={`status-dot status-dot--${syncColor}`} />
+              {sync.label}
+            </div>
+          </div>
+          <p style={{ fontSize: 12, color: 'var(--muted)', margin: '2px 0 0' }}>{sync.description}</p>
+        </div>
+        <div className="status-dock-section">
+          <p className="status-dock-section-title">Storage</p>
+          <div className="status-dock-row">
+            <span className="status-dock-row-label">Ideas</span>
+            <span className="status-dock-row-value">{ideasCount}</span>
+          </div>
+          <div className="status-dock-row">
+            <span className="status-dock-row-label">Projects</span>
+            <span className="status-dock-row-value">{projectsCount}</span>
+          </div>
+          <div className="status-dock-row">
+            <span className="status-dock-row-label">Tasks</span>
+            <span className="status-dock-row-value">{tasksCount}</span>
+          </div>
+          <div className="status-dock-row">
+            <span className="status-dock-row-label">Notes</span>
+            <span className="status-dock-row-value">{notesCount}</span>
+          </div>
         </div>
       </div>
     </aside>

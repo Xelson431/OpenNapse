@@ -3,14 +3,30 @@ import type { AuthStatus } from '../auth/use-auth-status'
 
 export type SyncStatus = 'local-only' | 'synced' | 'syncing' | 'offline'
 
-export function useSyncStatus(authStatus?: AuthStatus) {
+export function useSyncStatus(authStatus?: AuthStatus, workspaceBootstrap?: { mode: string; description?: string }) {
   const env = getSupabaseEnv()
 
   if (authStatus?.mode === 'signed-in') {
+    if (workspaceBootstrap?.mode === 'failed') {
+      return {
+        status: 'offline' as SyncStatus,
+        label: 'Bootstrap failed',
+        description: workspaceBootstrap.description ?? 'Workspace setup failed.',
+        syncNow: async () => undefined,
+      }
+    }
+    if (workspaceBootstrap?.mode === 'bootstrapping' || workspaceBootstrap?.mode === 'idle') {
+      return {
+        status: 'syncing' as SyncStatus,
+        label: 'Connecting…',
+        description: workspaceBootstrap.description ?? 'Setting up workspace…',
+        syncNow: async () => undefined,
+      }
+    }
     return {
       status: 'synced' as SyncStatus,
       label: 'Synced',
-      description: 'Authenticated and connected to Supabase.',
+      description: workspaceBootstrap?.description ?? 'Connected.',
       syncNow: async () => undefined,
     }
   }
