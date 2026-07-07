@@ -79,8 +79,9 @@ const THEME_STORAGE_KEY = 'OpenNapse:v0:theme'
 const MENTOR_STORAGE_KEY = 'OpenNapse:v0:mentor-sessions'
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'OpenNapse:v0:sidebar-collapsed'
 const CLOUD_MIGRATION_DISMISSED_STORAGE_KEY = 'OpenNapse:v0:cloud-migration-dismissed'
+const ACTIVE_VIEW_STORAGE_KEY = 'OpenNapse:v0:active-view'
 const MOBILE_MEDIA_QUERY = '(max-width: 640px)'
-const ENABLE_TEAM_WORKSPACES = false
+const ENABLE_TEAM_WORKSPACES = import.meta.env.VITE_ENABLE_TEAM_WORKSPACES === 'true'
 
 function countExportPayload(payload: string): LocalCloudMigrationPrompt['counts'] {
   try {
@@ -133,7 +134,11 @@ const views: Array<{ id: ViewId; label: string; icon: IconName; status: FeatureD
 ]
 
 function App() {
-  const [activeView, setActiveView] = useState<ViewId>('capture')
+  const [activeView, setActiveView] = useState<ViewId>(() => {
+    const stored = typeof window !== 'undefined' ? localStorage.getItem(ACTIVE_VIEW_STORAGE_KEY) : null
+    const valid: ViewId[] = ['capture', 'dashboard', 'kanban', 'notes', 'graph', 'focus', 'stats']
+    return stored && valid.includes(stored as ViewId) ? (stored as ViewId) : 'capture'
+  })
   const [sidebarTab, setSidebarTab] = useState<'folders' | 'tags'>('folders')
   const [sidebarFilter, setSidebarFilter] = useState<SidebarFilter>({ kind: 'all' })
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(getInitialSidebarCollapsed)
@@ -236,7 +241,7 @@ function App() {
         }
 
         setDb(createSupabaseCloudAdapter())
-        getDb().setActiveWorkspaceId(workspaceBootstrap.workspaceId)
+        setActiveWorkspace(workspaceBootstrap.workspaceId)
         await loadWorkspaces()
         await loadIdeas()
         await loadWorkspace()
@@ -261,6 +266,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem(AI_SETTINGS_STORAGE_KEY, serializeAISettings(aiSettings))
   }, [aiSettings])
+
+  useEffect(() => {
+    localStorage.setItem(ACTIVE_VIEW_STORAGE_KEY, activeView)
+  }, [activeView])
 
   useEffect(() => {
     localStorage.setItem(MENTOR_STORAGE_KEY, JSON.stringify(mentorSessions))
@@ -523,7 +532,7 @@ function App() {
                 ))}
                 <option value="__create__">＋ Create workspace…</option>
               </select>
-              <small className="workspace-select-badge">{authStatus.mode === 'signed-in' ? 'Cloud' : activeWorkspace.badge}</small>
+              <small className="workspace-select-badge">{authStatus.mode === 'signed-in' && workspaceBootstrap?.mode === 'ready' ? 'Cloud' : activeWorkspace.badge}</small>
             </div>
             <span className="sync-status-pill" title={sync.description}>
                {sync.label}
@@ -887,10 +896,10 @@ function CaptureView({ ideas, buriedIdeas, isLoaded, onBury, onResurrect, onProm
       </div>
 
       <div className="masonry-grid">
-        {!isLoaded ? <p className="empty-state">Loading your local brain map...</p> : null}
+        {!isLoaded ? <p className="empty-state">Loading…</p> : null}
         {isLoaded && ideas.length === 0 ? (
           <button className="empty-state interactive" type="button" onClick={onCapture}>
-            <Icon name="plus" /> Create your first local idea
+            <Icon name="plus" /> Create your first idea
           </button>
         ) : null}
         {filteredIdeas.map((idea, i) => {
@@ -1388,6 +1397,7 @@ function NoteEditor({ activeId, notes, projects, selectedProjectId, onSave }: { 
   const [recordings, setRecordings] = useState<VoiceRecording[]>(initialNote?.voiceRecordings ?? [])
   const [previewMode, setPreviewMode] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [saveError, setSaveError] = useState('')
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const chunksRef = useRef<Blob[]>([])
@@ -1516,7 +1526,7 @@ function NoteEditor({ activeId, notes, projects, selectedProjectId, onSave }: { 
           </button>
         </div>
         {isRecording && <span className="note-recording-indicator">Recording…</span>}
-        <form className="notes-editor-content" onSubmit={async (event) => { event.preventDefault(); if (submitting) return; setSubmitting(true); try { await onSave({ id: activeId, title, content, linkedProjectId: linkedProjectId || null, voiceRecordings: recordings }) } finally { setSubmitting(false) } }}>
+        <form className="notes-editor-content" onSubmit={async (event) => { event.preventDefault(); if (submitting) return; setSubmitting(true); setSaveError(''); try { await onSave({ id: activeId, title, content, linkedProjectId: linkedProjectId || null, voiceRecordings: recordings }) } catch (err) { setSaveError(err instanceof Error ? err.message : String(err)) } finally { setSubmitting(false) } }}>
           <h3 className="sr-only" style={{display: 'none'}}>Local document</h3>
           <input className="note-title-input" aria-label="Note title" value={title} onChange={(event) => setTitle(event.target.value)} />
           {previewMode ? (
@@ -1535,6 +1545,7 @@ function NoteEditor({ activeId, notes, projects, selectedProjectId, onSave }: { 
             </div>
           )}
           <button className="btn btn-primary" type="submit" disabled={submitting}>Save note</button>
+          {saveError ? <p className="settings-status settings-status--error">{saveError}</p> : null}
         </form>
       </div>
 
@@ -1868,7 +1879,7 @@ function GraphView({ ideas, projects, tasks, notes, selectedProjectId }: { ideas
         <div>
           <p className="eyebrow">Relationship graph</p>
           <h2>See how your brain map connects.</h2>
-          <p>A compact relationship map keeps ideas, projects, tasks, and notes connected without leaving the local workspace.</p>
+          <p>A compact relationship map keeps ideas, projects, tasks, and notes connected in a single workspace view.</p>
         </div>
       </div>
       <div className="graph-panel">
@@ -1949,7 +1960,7 @@ function GraphView({ ideas, projects, tasks, notes, selectedProjectId }: { ideas
                     <>
                       <p className="graph-detail-kind">{selectedNode.kind}</p>
                       <p className="graph-detail-copy">
-                        {selectedNode.kind === 'Idea' && 'A raw thought with local context.'}
+                        {selectedNode.kind === 'Idea' && 'A raw thought with full context.'}
                         {selectedNode.kind === 'Project' && 'A concrete lane where ideas turn into delivery.'}
                         {selectedNode.kind === 'Task' && 'An execution step tied to progress.'}
                         {selectedNode.kind === 'Note' && 'Captured context, links, and decisions.'}
@@ -2127,7 +2138,7 @@ function StatsView({ ideas, projects, tasks, notes, exportData, importData, relo
         <div>
           <p className="eyebrow">Momentum</p>
           <h2>Measure conversion from idea to reality.</h2>
-          <p>Stats, export, and import are operational locally. Cloud backup remains opt-in and coming soon.</p>
+          <p>Stats, export, and import are ready. Cloud backup is planned.</p>
         </div>
       </div>
       <div className="stats-grid" aria-label="Statistics">
@@ -2760,7 +2771,7 @@ function MentorPanel({
   )
 }
 
-const DEV_ADMIN_EMAIL = 'admin@opennapse.local'
+
 
 function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, onWorkspaceModeChange, supabaseEnv, authStatus, workspaceBootstrap, aiSettings, onAISettingsChange, sessionKeys, onSessionKeyChange, acceptedPreviewHash, onAcceptPreview, settingsSavedAt, onClearData, onClose }: {
   theme: ThemeMode
@@ -2782,7 +2793,7 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
   onClose: () => void
 }) {
   const [statusMessage, setStatusMessage] = useState('')
-  const [authEmail, setAuthEmail] = useState(DEV_ADMIN_EMAIL)
+  const [authEmail, setAuthEmail] = useState('')
   const [authActionMessage, setAuthActionMessage] = useState('')
   const [clearDataMessage, setClearDataMessage] = useState('')
   const [connectionResult, setConnectionResult] = useState<{ ok: boolean; message: string } | null>(null)
@@ -3021,12 +3032,12 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
                         type="email"
                         value={authEmail}
                         onChange={(event) => setAuthEmail(event.target.value)}
-                        placeholder={isHosted ? 'you@example.com' : DEV_ADMIN_EMAIL}
+                        placeholder="you@example.com"
                         disabled={!supabaseEnv.configured}
                       />
                     </label>
                     {!isHosted ? (
-                      <p className="settings-muted">Dev admin email is prefilled for local staging. No real admin account is created here.</p>
+                      <p className="settings-muted">Magic link sign-in is only available with a Supabase backend configured.</p>
                     ) : null}
                     <div className="settings-actions">
                       <button
@@ -3190,7 +3201,7 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
             <div className="settings-grid">
               <section className="settings-panel" aria-labelledby="workspace-settings-title">
                 <h4 id="workspace-settings-title">Workspace</h4>
-                <p className="settings-muted">Personal is private by default. Teams are disabled in local/self-hosted builds and reserved for the future hosted product.</p>
+                <p className="settings-muted">{isHosted ? 'Personal workspaces keep your content separate. Teams are reserved for the hosted product.' : 'Personal is private by default. Teams are disabled in local builds and reserved for the future hosted product.'}</p>
                 <div className="segmented-control segmented-control--wide" role="group" aria-label="Workspace mode">
                   <button type="button" className={workspaceMode === 'personal' ? 'active' : ''} onClick={() => onWorkspaceModeChange('personal')}>Personal</button>
                   <button type="button" disabled title={workspaceModes['team-preview'].description}>Team</button>
@@ -3371,6 +3382,7 @@ function BillingSettingsPanel({ activeWorkspace, authStatus, workspaceBootstrap 
   const [busyPlanId, setBusyPlanId] = useState<string | null>(null)
   const [actionError, setActionError] = useState('')
   const canUseBilling = billingEnv.configured && authStatus.mode === 'signed-in'
+  const isServiceDown = !loading && (error || status.status === 'unavailable')
 
   async function startCheckout(planId: string) {
     setBusyPlanId(planId)
@@ -3403,32 +3415,41 @@ function BillingSettingsPanel({ activeWorkspace, authStatus, workspaceBootstrap 
         <p className="settings-muted">Sign in to check hosted plan status.</p>
       ) : (
         <>
-          <div className="settings-row"><span>Current plan</span><strong>{loading ? 'Checking…' : status.planName}</strong></div>
-          <div className="settings-row"><span>Status</span><strong>{status.status}</strong></div>
-          {status.periodEnd ? <div className="settings-row"><span>Period ends</span><strong>{new Date(status.periodEnd).toLocaleDateString()}</strong></div> : null}
-          {status.plans.length > 0 ? (
-            <div style={{ marginTop: 12 }}>
-              <span style={{ fontWeight: 600, fontSize: '0.85em', color: 'var(--muted)' }}>Available features by plan</span>
-              {status.plans.map((plan) => {
-                const isCurrent = plan.id === status.planId
-                return (
-                  <div key={plan.id} style={{ marginTop: 8, opacity: isCurrent ? 1 : 0.5 }}>
-                    <span style={{ fontWeight: 600 }}>{plan.name}{isCurrent ? <span style={{ marginLeft: 6, color: 'var(--accent)', fontSize: '0.85em' }}>· Current</span> : null}</span>
-                    <ul className="settings-list" style={{ marginTop: 4 }}>
-                      {plan.features.map((feature) => <li key={feature}>{feature}</li>)}
-                    </ul>
-                  </div>
-                )
-              })}
+          {isServiceDown ? (
+            <div className="settings-panel" style={{ marginBottom: 0 }}>
+              <p className="settings-muted">Billing service is temporarily unavailable. Retry after a moment.</p>
             </div>
-          ) : null}
-          <div className="settings-actions">
-            <button type="button" className="btn btn-primary" disabled={!canUseBilling} onClick={() => setPricingOpen(true)}>Upgrade</button>
-            <button type="button" className="btn btn-secondary" disabled={!canUseBilling} onClick={() => void openPortal()}>Manage billing</button>
-          </div>
+          ) : (
+            <>
+              <p className="settings-muted">Your subscription covers all workspaces in your account.</p>
+              <div className="settings-row"><span>Current plan</span><strong>{loading ? 'Checking…' : status.planName}</strong></div>
+              <div className="settings-row"><span>Status</span><strong>{loading ? '…' : status.status}</strong></div>
+              {status.periodEnd ? <div className="settings-row"><span>Period ends</span><strong>{new Date(status.periodEnd).toLocaleDateString()}</strong></div> : null}
+              {status.plans.length > 0 ? (
+                <div style={{ marginTop: 12 }}>
+                  <span style={{ fontWeight: 600, fontSize: '0.85em', color: 'var(--muted)' }}>Available features by plan</span>
+                  {status.plans.map((plan) => {
+                    const isCurrent = plan.id === status.planId
+                    return (
+                      <div key={plan.id} style={{ marginTop: 8, opacity: isCurrent ? 1 : 0.5 }}>
+                        <span style={{ fontWeight: 600 }}>{plan.name}{isCurrent ? <span style={{ marginLeft: 6, color: 'var(--accent)', fontSize: '0.85em' }}>· Current</span> : null}</span>
+                        <ul className="settings-list" style={{ marginTop: 4 }}>
+                          {plan.features.map((feature) => <li key={feature}>{feature}</li>)}
+                        </ul>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : null}
+              <div className="settings-actions">
+                <button type="button" className="btn btn-primary" disabled={!canUseBilling} onClick={() => setPricingOpen(true)}>Upgrade</button>
+                <button type="button" className="btn btn-secondary" disabled={!canUseBilling} onClick={() => void openPortal()}>Manage billing</button>
+              </div>
+            </>
+          )}
         </>
       )}
-      {error || actionError ? <p className="settings-status settings-status--error">{error || actionError}</p> : null}
+      {!isServiceDown && (error || actionError) ? <p className="settings-status settings-status--error">{error || actionError}</p> : null}
       {pricingOpen ? (
         <PricingModal
           plans={status.plans}
@@ -3629,7 +3650,7 @@ function CreateWorkspaceModal({ allowTeamWorkspaces, onCreate, onClose }: {
         </div>
         <form className="settings-panel" onSubmit={handleSubmit}>
           <p className="settings-muted">
-            Each workspace is its own container for ideas, projects, tasks, and notes. Local workspaces are personal-only; team workspaces are reserved for the future hosted version.
+            Each workspace is its own container for ideas, projects, tasks, and notes. Personal workspaces are private by default. Team workspaces are reserved for the hosted product.
           </p>
           <label className="settings-field">
             <span>Name</span>
@@ -3647,10 +3668,10 @@ function CreateWorkspaceModal({ allowTeamWorkspaces, onCreate, onClose }: {
             <span>Type</span>
             <div className="segmented-control" role="group" aria-label="Workspace type">
               <button type="button" className={type === 'personal' ? 'active' : ''} onClick={() => setType('personal')} disabled={isBusy}>Personal</button>
-              <button type="button" className={type === 'team' ? 'active' : ''} onClick={() => setType('team')} disabled={isBusy || !allowTeamWorkspaces} title={allowTeamWorkspaces ? 'Create a shared workspace' : 'Teams are disabled locally and reserved for hosted OpenNapse.'}>Team</button>
+              <button type="button" className={type === 'team' ? 'active' : ''} onClick={() => setType('team')} disabled={isBusy || !allowTeamWorkspaces} title={allowTeamWorkspaces ? 'Create a shared workspace' : 'Teams are reserved for the hosted OpenNapse plan.'}>Team</button>
             </div>
           </div>
-          {!allowTeamWorkspaces ? <p className="settings-muted">Team workspaces are intentionally disabled here. Use personal workspaces locally; hosted teams come later.</p> : null}
+          {!allowTeamWorkspaces ? <p className="settings-muted">Team workspaces require the hosted OpenNapse plan. Sign in with Supabase configured to unlock them.</p> : null}
           <div className="settings-actions">
             <button type="submit" className="btn btn-primary" disabled={isBusy || trimmed.length === 0}>
               {isBusy ? 'Creating…' : 'Create workspace'}
@@ -3683,7 +3704,7 @@ function TutorialOverlay({ hasContent }: { hasContent: boolean }) {
   const steps: Array<{ title: string; body: string }> = [
     {
       title: 'Welcome to OpenNapse',
-      body: 'Capture ideas fast, promote the ones that matter into projects, and keep everything private by default on this device.',
+      body: 'Capture ideas fast, promote the ones that matter into projects, and keep everything organized in one place.',
     },
     {
       title: 'Capture quickly',
@@ -3691,11 +3712,11 @@ function TutorialOverlay({ hasContent }: { hasContent: boolean }) {
     },
     {
       title: 'Workspaces and teams',
-      body: 'Use the workspace dropdown in the toolbar to switch between containers. Create a team workspace to invite members once you sign in.',
+      body: 'Use the workspace dropdown in the toolbar to switch between containers. You can organize ideas, projects, and notes across different workspaces.',
     },
     {
       title: 'Everything else',
-      body: 'Cmd/Ctrl + K opens the command palette. Settings holds AI providers, credits, and privacy controls. Ready when you are.',
+      body: 'Cmd/Ctrl + K opens the command palette. Settings holds AI providers, credits, and privacy controls. Click the sync pill to sign in and connect your account. Ready when you are.',
     },
   ]
 

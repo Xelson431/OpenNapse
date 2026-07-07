@@ -157,7 +157,7 @@ describe('Signed-in auth flows', () => {
     expect(screen.queryByRole('button', { name: /^advanced$/i })).not.toBeInTheDocument()
   })
 
-  it('hides Supabase project details and dev admin text when billing URL is configured (hosted)', async () => {
+  it('hides Supabase project details when billing URL is configured (hosted)', async () => {
     mockBillingEnv = configuredBillingEnv
     const user = userEvent.setup()
     render(<App />)
@@ -261,16 +261,15 @@ describe('Settings — Account tab in local/unavailable mode', () => {
     mockBootstrap = waitingBootstrap
   })
 
-  it('shows dev admin email field and form', async () => {
+  it('shows disabled email field and magic link form', async () => {
     const user = userEvent.setup()
     render(<App />)
 
     await user.click(screen.getByRole('button', { name: /settings/i }))
 
     expect(screen.getByLabelText(/email for magic link/i)).toBeDisabled()
-    expect(screen.getByLabelText(/email for magic link/i)).toHaveValue('admin@opennapse.local')
+    expect(screen.getByLabelText(/email for magic link/i)).toHaveValue('')
     expect(screen.getByRole('button', { name: /send magic link/i })).toBeDisabled()
-    expect(screen.getByText(/Dev admin email is prefilled/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /sign out/i })).not.toBeInTheDocument()
   })
 })
