@@ -1091,7 +1091,9 @@
 .note-preview code { background: var(--bg); padding: 2px 5px; border-radius: 4px; font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 .note-preview ul { padding-left: 20px; margin: 8px 0; }
 .note-preview li { margin: 4px 0; }
-.notes-editor-content button[type="submit"] { align-self: flex-start; }
+.note-actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+.note-actions .btn { align-self: flex-start; }
+.note-save-status { font-size: 11px; color: var(--muted); margin-left: auto; }
 .note-recording-indicator { font-size: 12px; color: oklch(60% 0.18 25); padding: 4px 12px; animation: micPulse 1.2s ease-in-out infinite; }
 .note-recordings { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .note-recording { display: flex; align-items: center; gap: 8px; background: var(--bg); padding: 6px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); }
