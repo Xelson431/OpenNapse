@@ -183,7 +183,8 @@ function App() {
     () => (activeWorkspaceRecord ? createActiveWorkspaceFromRecord(activeWorkspaceRecord) : createActiveWorkspace(workspaceMode)),
     [activeWorkspaceRecord, workspaceMode],
   )
-  const sync = useSyncStatus(authStatus)
+  const rawSync = useSyncStatus(authStatus)
+  const sync = workspaceBootstrap.mode === 'failed' ? { ...rawSync, label: 'Bootstrap failed', description: workspaceBootstrap.description } : rawSync
 
   const [mentorSessions, setMentorSessions] = useState<MentorSession[]>(() => {
     const raw = localStorage.getItem(MENTOR_STORAGE_KEY)
