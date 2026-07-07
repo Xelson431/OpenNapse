@@ -2559,7 +2559,7 @@ function PromotionModal({ idea, onClose, onSubmit }: {
 function NavRail({ activeTab, onTabChange, ideaCount, theme, onToggleTheme, onOpenSettings }: { activeTab: ViewId; onTabChange: (view: ViewId) => void; ideaCount: number; theme: ThemeMode; onToggleTheme: () => void; onOpenSettings: () => void }) {
   return (
     <nav className="nav-rail" role="navigation" aria-label="Main navigation">
-      <div className="nav-rail-logo" title="OpenNapse">ON</div>
+      <img className="nav-rail-logo" src="/icons8-brain-liquid-glass-96.png" alt="OpenNapse" title="OpenNapse" />
       <div className="nav-rail-items">
         {views.map(tab => (
           <button
@@ -2570,7 +2570,10 @@ function NavRail({ activeTab, onTabChange, ideaCount, theme, onToggleTheme, onOp
             aria-label={tab.label}
             aria-current={activeTab === tab.id ? 'page' : undefined}
           >
-            <Icon name={tab.icon} />
+            <span className="nav-rail-item-icon">
+              <Icon name={tab.icon} />
+            </span>
+            <span className="nav-rail-item-label">{tab.label}</span>
             {tab.id === 'capture' && ideaCount > 0 && (
               <span className="nav-rail-badge">{ideaCount}</span>
             )}
@@ -2579,10 +2582,12 @@ function NavRail({ activeTab, onTabChange, ideaCount, theme, onToggleTheme, onOp
       </div>
       <div className="nav-rail-bottom">
         <button className="nav-rail-item" title="Settings" aria-label="Settings" onClick={onOpenSettings}>
-          <Icon name="settings" />
+          <span className="nav-rail-item-icon"><Icon name="settings" /></span>
+          <span className="nav-rail-item-label">Settings</span>
         </button>
         <button className="nav-rail-item" title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} aria-label="Toggle theme" aria-pressed={theme === 'dark'} onClick={onToggleTheme}>
-          <Icon name="moon" />
+          <span className="nav-rail-item-icon"><Icon name="moon" /></span>
+          <span className="nav-rail-item-label">{theme === 'dark' ? 'Light' : 'Dark'}</span>
         </button>
       </div>
     </nav>
