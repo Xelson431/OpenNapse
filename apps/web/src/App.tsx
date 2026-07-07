@@ -1507,8 +1507,7 @@ function NoteEditor({ activeId, notes, selectedProjectId, onSave }: { activeId?:
     return () => {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, title, linkedProjectId, recordings, onSave])
+  }, [activeId, title, linkedProjectId, recordings, dirty, onSave])
 
   const handleContentInput = useCallback(() => {
     markDirty()
@@ -1533,8 +1532,7 @@ function NoteEditor({ activeId, notes, selectedProjectId, onSave }: { activeId?:
     } finally {
       setSubmitting(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, title, linkedProjectId, recordings, submitting, onSave])
+  }, [activeId, title, linkedProjectId, recordings, submitting, dirty, onSave])
 
   const execCmd = useCallback((command: string, value?: string) => {
     editorRef.current?.focus()
