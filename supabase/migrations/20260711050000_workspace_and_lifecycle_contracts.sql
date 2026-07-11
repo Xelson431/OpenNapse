@@ -11,30 +11,28 @@ returns table (
   max_pending_invites integer,
   grace_until timestamptz
 )
-language sql
+language plpgsql
 stable
 security definer
 set search_path = public
 as $$
-  with subscription as (
-    select coalesce(ws.plan_id, 'free') as resolved_plan,
-           ws.status,
-           ws.current_period_end
-      from public.workspace_subscriptions ws
-     where ws.workspace_id = target_workspace_id
-  )
-  select
-    coalesce(subscription.resolved_plan, 'free'),
-    case when subscription.resolved_plan = 'pro' then 20 else 1 end,
-    case when subscription.resolved_plan = 'pro' then 100 else 1 end,
-    case when subscription.resolved_plan = 'pro' then 100 else 10 end,
-    case when subscription.resolved_plan = 'pro' then 100 else 5 end,
-    case when subscription.status = 'past_due'
-      then subscription.current_period_end + interval '7 days'
-      else null
-    end
-  from (select 1) seed
-  left join subscription on true;
+declare
+  resolved_plan text;
+  sub_status text;
+  sub_period_end timestamptz;
+begin
+  select coalesce(ws.plan_id, 'free'), ws.status, ws.current_period_end
+    into resolved_plan, sub_status, sub_period_end
+    from public.workspace_subscriptions ws
+   where ws.workspace_id = target_workspace_id;
+  return query select
+    coalesce(resolved_plan, 'free')::text,
+    case when resolved_plan = 'pro' then 20 else 1 end,
+    case when resolved_plan = 'pro' then 100 else 1 end,
+    case when resolved_plan = 'pro' then 100 else 10 end,
+    case when resolved_plan = 'pro' then 100 else 5 end,
+    case when sub_status = 'past_due' then sub_period_end + interval '7 days' else null end;
+end;
 $$;
 
 revoke all on function public.entitlement_limits(uuid) from public;
