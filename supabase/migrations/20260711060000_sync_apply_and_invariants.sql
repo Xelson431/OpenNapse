@@ -15,20 +15,27 @@ $$;
 create or replace function public.enforce_content_workspace_references()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  if tg_table_name = 'projects' and new.source_idea_id is not null
-     and not exists (select 1 from public.ideas where id = new.source_idea_id and workspace_id = new.workspace_id) then
-    raise exception 'project source idea must belong to the same workspace';
-  elsif tg_table_name = 'ideas' and new.project_id is not null
-     and not exists (select 1 from public.projects where id = new.project_id and workspace_id = new.workspace_id) then
-    raise exception 'idea project must belong to the same workspace';
-  elsif tg_table_name = 'tasks' then
+  if tg_table_name = 'projects' then
+    if new.source_idea_id is not null
+       and not exists (select 1 from public.ideas where id = new.source_idea_id and workspace_id = new.workspace_id) then
+      raise exception 'project source idea must belong to the same workspace';
+    end if;
+  end if;
+  if tg_table_name = 'ideas' then
+    if new.project_id is not null
+       and not exists (select 1 from public.projects where id = new.project_id and workspace_id = new.workspace_id) then
+      raise exception 'idea project must belong to the same workspace';
+    end if;
+  end if;
+  if tg_table_name = 'tasks' then
     if not exists (select 1 from public.projects where id = new.project_id and workspace_id = new.workspace_id) then
       raise exception 'task project must belong to the same workspace';
     end if;
     if new.idea_id is not null and not exists (select 1 from public.ideas where id = new.idea_id and workspace_id = new.workspace_id) then
       raise exception 'task idea must belong to the same workspace';
     end if;
-  elsif tg_table_name = 'notes' then
+  end if;
+  if tg_table_name = 'notes' then
     if new.linked_project_id is not null and not exists (select 1 from public.projects where id = new.linked_project_id and workspace_id = new.workspace_id) then
       raise exception 'note project must belong to the same workspace';
     end if;
