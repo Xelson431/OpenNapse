@@ -62,14 +62,20 @@ Deno.serve(async (request) => {
     return json(403, { error: 'Only workspace owners/admins can invite.' })
   }
 
-  // Rate limit: max 20 pending invites per workspace per 24h.
+  const { data: limitRows, error: limitError } = await caller.rpc('entitlement_limits', {
+    target_workspace_id: body.workspaceId,
+  })
+  const inviteLimit = (limitRows as Array<{ max_pending_invites: number }> | null)?.[0]?.max_pending_invites
+  if (limitError || !inviteLimit) return json(503, { error: 'Workspace invite entitlement is unavailable.' })
+
+  // The entitlement supplies the per-workspace rolling invite limit.
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
   const { count: recentCount } = await caller
     .from('workspace_invites')
     .select('id', { count: 'exact', head: true })
     .eq('workspace_id', body.workspaceId)
     .gte('created_at', since)
-  if ((recentCount ?? 0) >= 20) return json(429, { error: 'Invite rate limit reached for this workspace.' })
+  if ((recentCount ?? 0) >= inviteLimit) return json(429, { error: 'Invite rate limit reached for this workspace.' })
 
   const token = randomToken()
   const { data: invite, error: insertError } = await caller

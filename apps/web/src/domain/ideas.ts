@@ -5,6 +5,7 @@ export const moodSchema = z.enum(['focused', 'creative', 'anxious', 'energetic',
 
 export const ideaSchema = z.object({
   id: z.string().uuid(),
+  logicalId: z.string().uuid().optional(),
   workspaceId: z.string().min(1),
   createdBy: z.string().min(1),
   title: z.string().trim().min(1).max(180),
@@ -53,8 +54,10 @@ export function getIdeaTemperature(lastTouchedAt: string, now = new Date()): Ide
 
 export function createIdeaDraft(input: CreateIdeaInput, context: DraftContext): Idea {
   const now = new Date().toISOString()
+  const id = crypto.randomUUID()
   return ideaSchema.parse({
-    id: crypto.randomUUID(),
+    id,
+    logicalId: id,
     workspaceId: context.workspaceId,
     createdBy: context.createdBy,
     title: input.title,

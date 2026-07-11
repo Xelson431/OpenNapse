@@ -111,42 +111,14 @@ Deno.serve(async (request) => {
     })
   }
 
-  const { data: existingRows, error: lookupError } = await client
-    .from('workspaces')
-    .select('id')
-    .eq('owner_user_id', authData.user.id)
-    .eq('type', 'personal')
-    .limit(1)
-
-  if (lookupError) {
-    return new Response(JSON.stringify({ error: `Workspace lookup failed: ${lookupError.message}` }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }
-
-  const existingWorkspace = (existingRows as Array<{ id: string }> | null)?.[0]
-  const workspaceId = existingWorkspace?.id ?? plan.workspace.id
-
-  if (!existingWorkspace) {
-    const { error: workspaceError } = await client
-      .from('workspaces')
-      .insert(plan.workspace)
-
-    if (workspaceError) {
-      return new Response(JSON.stringify({ error: `Workspace bootstrap failed: ${workspaceError.message}` }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }
-  }
-
-  const { error: membershipError } = await client
-    .from('workspace_members')
-    .upsert({ ...plan.membership, workspace_id: workspaceId }, { onConflict: 'workspace_id,user_id' })
-
-  if (membershipError) {
-    return new Response(JSON.stringify({ error: `Membership bootstrap failed: ${membershipError.message}` }), {
+  const { data: workspaceRows, error: workspaceError } = await client.rpc('create_workspace', {
+    requested_name: plan.workspace.name,
+    requested_type: 'personal',
+    idempotency_key: plan.workspace.id,
+  })
+  const workspace = (workspaceRows as Array<{ workspace_id: string; created: boolean }> | null)?.[0]
+  if (workspaceError || !workspace) {
+    return new Response(JSON.stringify({ error: `Workspace bootstrap failed: ${workspaceError?.message ?? 'No workspace returned.'}` }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' },
     })
@@ -154,9 +126,9 @@ Deno.serve(async (request) => {
 
   return new Response(JSON.stringify({
     ok: true,
-    workspaceId,
-    created: !existingWorkspace,
-    message: existingWorkspace ? 'Personal workspace confirmed.' : 'Personal workspace created.',
+    workspaceId: workspace.workspace_id,
+    created: workspace.created,
+    message: workspace.created ? 'Personal workspace created.' : 'Personal workspace confirmed.',
   }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },

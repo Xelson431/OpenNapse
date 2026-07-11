@@ -11,6 +11,7 @@ import { acceptInvite, inviteWorkspaceMember, listWorkspaceInvites, listWorkspac
 import { getTodayBalance, listRecentUsage, type DailyCreditBalance, type UsageEvent } from './auth/credits'
 import { createBillingPortalSession, createCheckoutSession, useSubscriptionStatus } from './auth/billing'
 import { listAuditLog, type AuditEntry } from './auth/audit'
+import { cancelDeletion, requestDeletion } from './auth/lifecycle'
 import { Icon, type IconName } from './components/Icon'
 import { PricingModal } from './components/PricingModal'
 import { fetchProfile, updateDisplayName } from './auth/profile'
@@ -26,7 +27,6 @@ import { taskColumns, type CreateTaskInput, type Task, type TaskColumn, type Upd
 import { LOCAL_PERSONAL_WORKSPACE_ID, createActiveWorkspace, createActiveWorkspaceFromRecord, workspaceModes, type ActiveWorkspace, type WorkspaceMode } from './domain/workspaces'
 import { IDEA_DRAG_MIME, hasIdeaDragPayload, readIdeaDragPayload } from './lib/drag'
 import { useSyncStatus, type CloudConnectionStatus } from './sync/use-sync'
-import { hasExportedContent, migrateLocalDataToCloud } from './sync/cloud-migration'
 import { useIdeasStore } from './stores/use-ideas-store'
 import { toPromoteInput, useWorkspaceStore } from './stores/use-workspace-store'
 import { useWorkspacesStore } from './stores/use-workspaces-store'
@@ -44,10 +44,6 @@ type MentorSession = {
   createdAt: string
   updatedAt: string
   messages: { id: string; role: MentorRole; content: string; createdAt: string }[]
-}
-type LocalCloudMigrationPrompt = {
-  payload: string
-  counts: { ideas: number; projects: number; tasks: number; notes: number }
 }
 type SidebarFilter =
   | { kind: 'all' }
@@ -81,7 +77,6 @@ function clampGraphPoint(value: number) {
 const THEME_STORAGE_KEY = 'OpenNapse:v0:theme'
 const MENTOR_STORAGE_KEY = 'OpenNapse:v0:mentor-sessions'
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'OpenNapse:v0:sidebar-collapsed'
-const CLOUD_MIGRATION_DISMISSED_STORAGE_KEY = 'OpenNapse:v0:cloud-migration-dismissed'
 const ACTIVE_VIEW_STORAGE_KEY = 'OpenNapse:v0:active-view'
 const MOBILE_MEDIA_QUERY = '(max-width: 640px)'
 const ENABLE_TEAM_WORKSPACES = import.meta.env.VITE_ENABLE_TEAM_WORKSPACES === 'true'
@@ -131,7 +126,11 @@ function App() {
   const [flowMode, setFlowMode] = useState(false)
   const [theme, setTheme] = useState<ThemeMode>(() => {
     const stored = localStorage.getItem(THEME_STORAGE_KEY)
-    return stored === 'dark' ? 'dark' : 'light'
+    if (stored === 'dark' || stored === 'light') return stored
+    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+    }
+    return 'light'
   })
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('personal')
   const { workspaces, activeWorkspaceId, loadWorkspaces, setActiveWorkspace, createWorkspace: createWorkspaceRecord } = useWorkspacesStore()
@@ -151,8 +150,6 @@ function App() {
   const [sessionKeys, setSessionKeys] = useState<Record<string, string>>({})
   const [acceptedPreviewHash, setAcceptedPreviewHash] = useState<string | undefined>()
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null)
-  const [cloudMigrationPrompt, setCloudMigrationPrompt] = useState<LocalCloudMigrationPrompt | null>(null)
-  const [cloudMigrationMessage, setCloudMigrationMessage] = useState('')
   const { ideas, isLoaded, loadIdeas, createIdea, buryIdea, resurrectIdea, moveIdeaToProject, clearAllData: clearIdeas } = useIdeasStore()
   const { projects, tasks, notes, loadWorkspace, createProject, promoteIdea, createTask, moveTask, updateTask, upsertNote, deleteNote, exportData, importData, clearAllData: clearWorkspace } = useWorkspaceStore()
   const supabaseEnv = useMemo(() => getSupabaseEnv(), [])
@@ -204,8 +201,6 @@ function App() {
     setActiveWorkspace(LOCAL_PERSONAL_WORKSPACE_ID)
   }, [activeWorkspaceRecord, setActiveWorkspace])
 
-  const activeUserIdRef = useRef<string | null>(null)
-  const [didAutoMigrate, setDidAutoMigrate] = useState(false)
   useEffect(() => {
     logger.info('adapter', `Auth status: ${authStatus.mode}, Bootstrap: ${workspaceBootstrap.mode}`)
     void (async () => {
@@ -215,17 +210,6 @@ function App() {
         try {
           const cloudAdapter = createSupabaseCloudAdapter()
           cloudAdapter.setActiveWorkspaceId(workspaceBootstrap.workspaceId)
-          if (!didAutoMigrate && activeUserIdRef.current !== authStatus.userId) {
-            activeUserIdRef.current = authStatus.userId
-            const localAdapter = new BrowserLocalAdapter()
-            localAdapter.setActiveWorkspaceId(activeWorkspaceId)
-            const localCounts = await migrateLocalDataToCloud(localAdapter, cloudAdapter)
-            if (hasExportedContent(localCounts)) {
-              logger.info('adapter', 'Cloud migration evaluated', { localCounts })
-            }
-            setDidAutoMigrate(true)
-          }
-
           setDb(cloudAdapter)
           setActiveWorkspace(workspaceBootstrap.workspaceId)
           await loadWorkspaces()
@@ -241,8 +225,6 @@ function App() {
       }
       if (authStatus.mode === 'signed-out' || authStatus.mode === 'unavailable') {
         logger.info('adapter', 'Switching to BrowserLocalAdapter', { mode: authStatus.mode })
-        activeUserIdRef.current = null
-        setDidAutoMigrate(false)
         setCloudConnection({ mode: 'idle', description: 'Using local-only storage.' })
         setDb(new BrowserLocalAdapter())
         await loadWorkspaces()
@@ -250,7 +232,7 @@ function App() {
         await loadWorkspace()
       }
     })()
-  }, [authStatus.mode, authStatus.userId, workspaceBootstrap, activeWorkspaceId, loadIdeas, loadWorkspace, loadWorkspaces, didAutoMigrate, setActiveWorkspace])
+  }, [authStatus.mode, authStatus.userId, workspaceBootstrap, loadIdeas, loadWorkspace, loadWorkspaces, setActiveWorkspace])
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -641,7 +623,7 @@ function App() {
             <FocusView ideas={activeIdeas} tasks={tasks} selectedProjectId={selectedProjectId} onMoveTask={moveTask} />
           )}
           {activeView === 'stats' && (
-            <StatsView ideas={ideas} projects={projects} tasks={tasks} notes={notes} exportData={exportData} importData={importData} reload={async () => { await loadIdeas(); await loadWorkspace() }} onLoadDemoData={async () => { await importData(JSON.stringify(dummyData)); await loadIdeas(); await loadWorkspace() }} onClearAllData={async () => { await clearIdeas(); await clearWorkspace(); await loadIdeas(); await loadWorkspace() }} />
+            <StatsView ideas={ideas} projects={projects} tasks={tasks} notes={notes} exportData={exportData} importData={importData} allowDestructiveImport={authStatus.mode !== 'signed-in'} reload={async () => { await loadIdeas(); await loadWorkspace() }} onLoadDemoData={async () => { await importData(JSON.stringify(dummyData)); await loadIdeas(); await loadWorkspace() }} onClearAllData={async () => { await clearIdeas(); await clearWorkspace(); await loadIdeas(); await loadWorkspace() }} />
           )}
           {activeView === 'logs' && <LogViewer />}
           {SHOW_LOCAL_AI_SUGGESTIONS ? <AISuggestions ideas={ideas} projects={projects} tasks={tasks} /> : null}
@@ -755,6 +737,7 @@ function App() {
           acceptedPreviewHash={acceptedPreviewHash}
           onAcceptPreview={(hash) => { setAcceptedPreviewHash(hash); setSettingsSavedAt(new Date().toISOString()) }}
           settingsSavedAt={settingsSavedAt}
+          allowClearData={authStatus.mode !== 'signed-in'}
           onClearData={async () => { await clearIdeas(); await clearWorkspace(); await loadIdeas(); await loadWorkspace() }}
           onClose={() => setIsSettingsOpen(false)}
         />
@@ -777,79 +760,8 @@ function App() {
           onClose={() => setIsCreateWorkspaceOpen(false)}
         />
       )}
-      {cloudMigrationPrompt ? (
-        <CloudMigrationPrompt
-          prompt={cloudMigrationPrompt}
-          message={cloudMigrationMessage}
-          onDismiss={() => {
-            try {
-              if (authStatus.userId) localStorage.setItem(CLOUD_MIGRATION_DISMISSED_STORAGE_KEY, authStatus.userId)
-            } catch {
-              // ignore storage failures
-            }
-            setCloudMigrationPrompt(null)
-            setCloudMigrationMessage('')
-          }}
-          onMigrate={async () => {
-            setCloudMigrationMessage('Migrating local data to your cloud workspace…')
-            await importData(cloudMigrationPrompt.payload)
-            await loadIdeas()
-            await loadWorkspace()
-            setCloudMigrationMessage('Local data migrated to cloud.')
-            setCloudMigrationPrompt(null)
-          }}
-        />
-      ) : null}
       <TutorialOverlay hasContent={ideas.length + projects.length > 0} />
     </main>
-  )
-}
-
-function CloudMigrationPrompt({ prompt, message, onMigrate, onDismiss }: {
-  prompt: LocalCloudMigrationPrompt
-  message: string
-  onMigrate: () => Promise<void>
-  onDismiss: () => void
-}) {
-  const [isMigrating, setIsMigrating] = useState(false)
-  return (
-    <div className="modal-overlay" onClick={onDismiss}>
-      <section className="brain-dump-modal" role="dialog" aria-modal="true" aria-labelledby="cloud-migration-title" onClick={(event) => event.stopPropagation()}>
-        <div className="brain-dump-header">
-          <div>
-            <p className="eyebrow">Cloud workspace</p>
-            <h3 id="cloud-migration-title">Move local data to cloud?</h3>
-          </div>
-          <button type="button" className="btn btn-ghost" onClick={onDismiss}>Skip</button>
-        </div>
-        <p className="settings-muted">
-          Your Supabase workspace is empty, but this browser has local content. Importing copies the current local workspace into cloud without deleting local data.
-        </p>
-        <div className="stats-grid" aria-label="Local data available to migrate">
-          <div className="stat-card"><span>Ideas</span><strong>{prompt.counts.ideas}</strong></div>
-          <div className="stat-card"><span>Projects</span><strong>{prompt.counts.projects}</strong></div>
-          <div className="stat-card"><span>Tasks</span><strong>{prompt.counts.tasks}</strong></div>
-          <div className="stat-card"><span>Notes</span><strong>{prompt.counts.notes}</strong></div>
-        </div>
-        <div className="settings-actions">
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={isMigrating}
-            onClick={async () => {
-              setIsMigrating(true)
-              try {
-                await onMigrate()
-              } finally {
-                setIsMigrating(false)
-              }
-            }}
-          >{isMigrating ? 'Migrating…' : 'Import to cloud'}</button>
-          <button type="button" className="btn btn-secondary" onClick={onDismiss} disabled={isMigrating}>Remind me later</button>
-        </div>
-        {message ? <p className="settings-status">{message}</p> : null}
-      </section>
-    </div>
   )
 }
 
@@ -2202,7 +2114,7 @@ function FocusView({ ideas, tasks, selectedProjectId, onMoveTask }: { ideas: Ide
   )
 }
 
-function StatsView({ ideas, projects, tasks, notes, exportData, importData, reload, onLoadDemoData, onClearAllData }: { ideas: Idea[]; projects: Project[]; tasks: Task[]; notes: Note[]; exportData: () => Promise<string>; importData: (payload: string) => Promise<void>; reload: () => Promise<void>; onLoadDemoData: () => Promise<void>; onClearAllData: () => Promise<void> }) {
+function StatsView({ ideas, projects, tasks, notes, exportData, importData, allowDestructiveImport, reload, onLoadDemoData, onClearAllData }: { ideas: Idea[]; projects: Project[]; tasks: Task[]; notes: Note[]; exportData: () => Promise<string>; importData: (payload: string) => Promise<void>; allowDestructiveImport: boolean; reload: () => Promise<void>; onLoadDemoData: () => Promise<void>; onClearAllData: () => Promise<void> }) {
   const stats = calculateStats(ideas, projects, tasks)
   const [backup, setBackup] = useState('')
   const [demoMessage, setDemoMessage] = useState('')
@@ -2229,9 +2141,10 @@ function StatsView({ ideas, projects, tasks, notes, exportData, importData, relo
         </div>
         <div className="backup-actions">
           <button className="btn btn-primary" type="button" onClick={() => void exportData().then(setBackup)}>Generate export</button>
-          <button className="btn btn-secondary" type="button" onClick={() => { if (window.confirm('Import all data? This replaces every idea, project, task, and note with the content in the textarea above. This cannot be undone.')) void importData(backup).then(reload) }}>Import from text</button>
-          <button className="btn btn-secondary" type="button" onClick={() => { if (window.confirm('Load demo data? This replaces all your existing ideas, projects, tasks, and notes with sample data. This cannot be undone.')) void onLoadDemoData().then(() => { setDemoMessage('Demo data loaded.'); reload() }).catch((err: unknown) => setDemoMessage(`Failed: ${err instanceof Error ? err.message : String(err)}`)) }}>Load demo data</button>
-          <button className="btn btn-ghost" type="button" onClick={() => { if (window.confirm('Factory reset? This permanently deletes ALL your ideas, projects, tasks, and notes. This cannot be undone.')) void onClearAllData().then(() => { setDemoMessage('Factory reset complete.') }) }}>Factory reset</button>
+          <button className="btn btn-secondary" type="button" disabled={!allowDestructiveImport} title={allowDestructiveImport ? undefined : 'Cloud imports are staged through the merge flow to protect existing workspace data.'} onClick={() => { if (window.confirm('Import all data? This replaces every idea, project, task, and note with the content in the textarea above. This cannot be undone.')) void importData(backup).then(reload) }}>Import from text</button>
+          {!allowDestructiveImport ? <p className="settings-muted">Cloud imports are disabled until the staged merge flow is available.</p> : null}
+          <button className="btn btn-secondary" type="button" disabled={!allowDestructiveImport} title={allowDestructiveImport ? undefined : 'Demo data cannot replace a cloud workspace.'} onClick={() => { if (window.confirm('Load demo data? This replaces all your existing ideas, projects, tasks, and notes with sample data. This cannot be undone.')) void onLoadDemoData().then(() => { setDemoMessage('Demo data loaded.'); reload() }).catch((err: unknown) => setDemoMessage(`Failed: ${err instanceof Error ? err.message : String(err)}`)) }}>Load demo data</button>
+          <button className="btn btn-ghost" type="button" disabled={!allowDestructiveImport} title={allowDestructiveImport ? undefined : 'Cloud deletion requires the dedicated workspace lifecycle flow.'} onClick={() => { if (window.confirm('Factory reset? This permanently deletes ALL your ideas, projects, tasks, and notes. This cannot be undone.')) void onClearAllData().then(() => { setDemoMessage('Factory reset complete.') }) }}>Factory reset</button>
         </div>
         {demoMessage ? <p className="settings-status">{demoMessage}</p> : null}
         <textarea aria-label="Backup JSON" value={backup} onChange={(event) => setBackup(event.target.value)} placeholder="Generated backup JSON appears here. Paste backup JSON here to import." />
@@ -2869,7 +2782,7 @@ function StatusDock({ isOpen, onClose, authStatus, workspaceBootstrap, sync, ide
 }) {
   const authColor = authStatus.mode === 'signed-in' ? 'green' : authStatus.mode === 'loading' ? 'yellow' : 'gray'
   const bootstrapColor = workspaceBootstrap.mode === 'ready' ? 'green' : workspaceBootstrap.mode === 'failed' ? 'red' : workspaceBootstrap.mode === 'bootstrapping' ? 'yellow' : 'gray'
-  const syncColor = sync.status === 'synced' ? 'green' : sync.status === 'offline' ? 'red' : sync.status === 'syncing' ? 'yellow' : 'gray'
+  const syncColor = sync.status === 'connected' ? 'green' : sync.status === 'offline' ? 'red' : sync.status === 'syncing' ? 'yellow' : 'gray'
   return (
     <aside className={`status-dock${isOpen ? ' open' : ''}`}>
       <div className="status-dock-header">
@@ -3001,7 +2914,7 @@ function LogViewer() {
 }
 
 
-function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, onWorkspaceModeChange, supabaseEnv, authStatus, workspaceBootstrap, aiSettings, onAISettingsChange, sessionKeys, onSessionKeyChange, acceptedPreviewHash, onAcceptPreview, settingsSavedAt, onClearData, onClose }: {
+function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, onWorkspaceModeChange, supabaseEnv, authStatus, workspaceBootstrap, aiSettings, onAISettingsChange, sessionKeys, onSessionKeyChange, acceptedPreviewHash, onAcceptPreview, settingsSavedAt, allowClearData, onClearData, onClose }: {
   theme: ThemeMode
   onThemeChange: (theme: ThemeMode) => void
   activeWorkspace: ActiveWorkspace
@@ -3017,6 +2930,7 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
   acceptedPreviewHash?: string
   onAcceptPreview: (hash: string | undefined) => void
   settingsSavedAt: string | null
+  allowClearData: boolean
   onClearData: () => Promise<void>
   onClose: () => void
 }) {
@@ -3024,6 +2938,8 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
   const [authEmail, setAuthEmail] = useState('')
   const [authActionMessage, setAuthActionMessage] = useState('')
   const [clearDataMessage, setClearDataMessage] = useState('')
+  const [deletionRequest, setDeletionRequest] = useState<{ requestId: string; confirmationToken: string; scheduledFor: string } | null>(null)
+  const [deletionToken, setDeletionToken] = useState('')
   const [connectionResult, setConnectionResult] = useState<{ ok: boolean; message: string } | null>(null)
   const [displayName, setDisplayName] = useState('')
   const [displayNameSavedAt, setDisplayNameSavedAt] = useState<string | null>(null)
@@ -3449,11 +3365,13 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
 
               <section className="settings-panel" aria-labelledby="factory-reset-title">
                 <h4 id="factory-reset-title">Factory reset</h4>
-                <p className="settings-muted">This permanently deletes all ideas, projects, tasks, and notes in the current workspace. Cannot be undone.</p>
+                <p className="settings-muted">{allowClearData ? 'This permanently deletes all ideas, projects, tasks, and notes in the current workspace. Cannot be undone.' : 'Immediate cloud deletion is disabled. Use the delayed, cancelable lifecycle control below.'}</p>
                 <div className="settings-actions">
                   <button
                     type="button"
                     className="btn btn-ghost"
+                    disabled={!allowClearData}
+                    title={allowClearData ? undefined : 'Cloud deletion requires the dedicated workspace lifecycle flow.'}
                     onClick={async () => {
                       if (!confirm('Factory reset? This will permanently delete ALL ideas, projects, tasks, and notes. This cannot be undone. Continue?')) return
                       await onClearData()
@@ -3463,6 +3381,29 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
                 </div>
                 {clearDataMessage ? <p className="settings-status">{clearDataMessage}</p> : null}
               </section>
+              {!allowClearData && authStatus.mode === 'signed-in' ? (
+                <section className="settings-panel" aria-labelledby="cloud-lifecycle-title">
+                  <h4 id="cloud-lifecycle-title">Cloud workspace lifecycle</h4>
+                  <p className="settings-muted">Deletion is delayed for 30 days and can be cancelled. Export your workspace before requesting deletion.</p>
+                  {deletionRequest ? (
+                    <>
+                      <p className="settings-status">Scheduled for {new Date(deletionRequest.scheduledFor).toLocaleString()}.</p>
+                      <label className="field"><span>Cancellation token</span><input value={deletionToken} onChange={(event) => setDeletionToken(event.target.value)} /></label>
+                      <div className="settings-actions"><button type="button" className="btn btn-secondary" onClick={async () => {
+                        await cancelDeletion(deletionRequest.requestId, deletionToken.trim())
+                        setDeletionRequest(null); setDeletionToken(''); setClearDataMessage('Cloud deletion request cancelled.')
+                      }}>Cancel deletion</button></div>
+                    </>
+                  ) : (
+                    <div className="settings-actions"><button type="button" className="btn btn-ghost" onClick={async () => {
+                      if (!confirm(`Schedule deletion of ${activeWorkspace.name} in 30 days? Export your data first.`)) return
+                      const created = await requestDeletion('workspace', activeWorkspace.id)
+                      setDeletionRequest(created); setDeletionToken(created.confirmationToken)
+                    }}>Request cloud deletion</button></div>
+                  )}
+                  {deletionRequest ? <p className="settings-muted">Keep this token to cancel the request: <code>{deletionRequest.confirmationToken}</code></p> : null}
+                </section>
+              ) : null}
             </div>
           )}
 

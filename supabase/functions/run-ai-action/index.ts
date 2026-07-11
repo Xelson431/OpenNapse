@@ -56,6 +56,15 @@ Deno.serve(async (request) => {
   if (authError || !authData.user) return json(401, { error: authError?.message ?? 'Unauthorized' })
   const user = authData.user
 
+  if (Deno.env.get('HOSTED_AI_ENABLED')?.trim().toLowerCase() !== 'true') {
+    return json(503, { error: 'Hosted AI is not available yet. Configure BYOK locally instead.' })
+  }
+  if (Deno.env.get('HOSTED_AI_DISPATCH_READY')?.trim().toLowerCase() !== 'true') {
+    return json(503, { error: 'Hosted AI provider dispatch has not passed production validation.' })
+  }
+  const dispatchImplemented = false
+  if (!dispatchImplemented) return json(503, { error: 'Hosted AI provider dispatch is not implemented.' })
+
   let body: RunAiActionBody
   try {
     body = (await request.json()) as RunAiActionBody
@@ -65,6 +74,7 @@ Deno.serve(async (request) => {
   if (!body || typeof body !== 'object') return json(400, { error: 'Invalid body.' })
   if (typeof body.actionType !== 'string') return json(400, { error: 'actionType required.' })
   if (typeof body.providerConfigId !== 'string') return json(400, { error: 'providerConfigId required.' })
+  if (!Object.hasOwn(AI_ACTION_COSTS, body.actionType)) return json(400, { error: 'Unsupported actionType.' })
 
   // Workspace access — only required when a workspaceId is supplied.
   if (body.workspaceId) {
@@ -92,21 +102,17 @@ Deno.serve(async (request) => {
     }
   }
 
-  const cost = AI_ACTION_COSTS[body.actionType] ?? 1
+  const cost = AI_ACTION_COSTS[body.actionType]
   const isByok = Boolean(config.vault_secret_id)
 
   // Credit enforcement — only when NOT BYOK (BYOK = free per product decision).
   if (!isByok && cost > 0) {
     const today = new Date().toISOString().slice(0, 10)
-    const { data: balance } = await admin
-      .from('daily_credit_balances')
-      .select('credits_granted, credits_used')
-      .eq('user_id', user.id)
-      .eq('day', today)
+    const { data: balance, error: balanceError } = await admin
+      .rpc('consume_daily_credits', { target_user_id: user.id, credit_cost: cost, target_day: today })
       .maybeSingle()
-    const granted = balance?.credits_granted ?? 10
-    const used = balance?.credits_used ?? 0
-    if (used + cost > granted) {
+    if (balanceError) return json(503, { error: 'Managed AI allowance is temporarily unavailable. Try again later or configure BYOK.' })
+    if (!balance) {
       await admin.from('ai_usage_events').insert({
         user_id: user.id,
         workspace_id: body.workspaceId ?? null,
@@ -125,24 +131,10 @@ Deno.serve(async (request) => {
 
   // NOTE: The actual provider HTTP dispatch (OpenAI, Anthropic, Ollama Cloud,
   // OpenRouter, Mistral, DeepSeek, Groq) is intentionally a TODO stub so this
-  // function can be deployed and reasoned about without a live key. Returning
-  // a typed ok response keeps the shape contract with the frontend gateway.
+  // function remains unavailable until this block is replaced and validated.
+  // HOSTED_AI_DISPATCH_READY must never be set while the guard above remains.
 
   // Bookkeeping.
-  const today = new Date().toISOString().slice(0, 10)
-  if (!isByok && cost > 0) {
-    const { data: current } = await admin
-      .from('daily_credit_balances')
-      .select('credits_granted, credits_used')
-      .eq('user_id', user.id)
-      .eq('day', today)
-      .maybeSingle()
-    const granted = current?.credits_granted ?? 10
-    const used = (current?.credits_used ?? 0) + cost
-    await admin
-      .from('daily_credit_balances')
-      .upsert({ user_id: user.id, day: today, credits_granted: granted, credits_used: used, updated_at: new Date().toISOString() }, { onConflict: 'user_id,day' })
-  }
   await admin.from('ai_usage_events').insert({
     user_id: user.id,
     workspace_id: body.workspaceId ?? null,

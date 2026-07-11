@@ -292,14 +292,27 @@ export class BrowserLocalAdapter implements DBAdapter {
   }
 
   async exportData(): Promise<string> {
+    const [workspaces, ideas, projects, tasks, notes] = await Promise.all([
+      this.listWorkspaces(),
+      this.readCollection(IDEAS_KEY, ideaSchema),
+      this.readCollection(PROJECTS_KEY, projectSchema),
+      this.readCollection(TASKS_KEY, taskSchema),
+      this.readCollection(NOTES_KEY, noteSchema),
+    ])
+    const withLogicalId = <T extends { id: string; logicalId?: string }>(records: T[]) =>
+      records.map((record) => ({ ...record, logicalId: record.logicalId ?? record.id }))
+
     return JSON.stringify(
       {
+        exportVersion: 2,
         exportedAt: new Date().toISOString(),
-        version: 0,
-        ideas: await this.listIdeas(),
-        projects: await this.listProjects(),
-        tasks: await this.listTasks(),
-        notes: await this.listNotes(),
+        deviceId: this.deviceId,
+        localUserId: this.localUserId,
+        workspaces,
+        ideas: withLogicalId(ideas),
+        projects: withLogicalId(projects),
+        tasks: withLogicalId(tasks),
+        notes: withLogicalId(notes),
       },
       null,
       2,
@@ -352,7 +365,12 @@ export class BrowserLocalAdapter implements DBAdapter {
 
   async listOutbox(): Promise<SyncOutboxEntry[]> {
     const raw = await this.backend.read<SyncOutboxEntry[]>(OUTBOX_KEY, [])
-    return Array.isArray(raw) ? raw : []
+    if (!Array.isArray(raw)) return []
+    // Outbox entries created before workspace scoping belong to the legacy
+    // personal workspace. Preserve them rather than dropping pending edits.
+    return raw
+      .map((entry) => ({ ...entry, workspaceId: entry.workspaceId || LOCAL_PERSONAL_WORKSPACE_ID }))
+      .filter((entry) => entry.workspaceId === this.activeWorkspaceId)
   }
 
   private async patchIdea(id: string, patch: Partial<Idea>): Promise<Idea> {
@@ -370,9 +388,15 @@ export class BrowserLocalAdapter implements DBAdapter {
 
   private async enqueue(entry: SyncOutboxEntry['tableName'], recordId: string, operation: SyncOutboxEntry['operation'], payload: unknown) {
     const outbox = await this.backend.read<SyncOutboxEntry[]>(OUTBOX_KEY, [])
-    const safeOutbox = Array.isArray(outbox) ? outbox : []
-    safeOutbox.push({
+    const safeOutbox = Array.isArray(outbox)
+      ? outbox.map((queued) => ({ ...queued, workspaceId: queued.workspaceId || LOCAL_PERSONAL_WORKSPACE_ID }))
+      : []
+    const existingIndex = entry === 'backup'
+      ? -1
+      : safeOutbox.findLastIndex((queued) => queued.workspaceId === this.activeWorkspaceId && queued.tableName === entry && queued.recordId === recordId)
+    const next: SyncOutboxEntry = {
       id: crypto.randomUUID(),
+      workspaceId: this.activeWorkspaceId,
       tableName: entry,
       recordId,
       operation,
@@ -380,7 +404,20 @@ export class BrowserLocalAdapter implements DBAdapter {
       createdAt: new Date().toISOString(),
       retryCount: 0,
       lastError: null,
-    })
+    }
+    if (existingIndex >= 0) {
+      const previous = safeOutbox[existingIndex]
+      // Keep the original mutation ID: retries remain idempotent while the
+      // newest document state replaces intermediate edits.
+      safeOutbox[existingIndex] = {
+        ...next,
+        id: previous.id,
+        createdAt: previous.createdAt,
+        operation: previous.operation === 'insert' && operation === 'update' ? 'insert' : operation,
+      }
+    } else {
+      safeOutbox.push(next)
+    }
     await this.backend.write(OUTBOX_KEY, safeOutbox)
   }
 }

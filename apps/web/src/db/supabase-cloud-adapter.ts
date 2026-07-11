@@ -21,7 +21,6 @@ import {
 } from '../domain/tasks'
 import {
   workspaceRecordSchema,
-  createWorkspaceRecord,
   type CreateWorkspaceInput,
   type WorkspaceRecord,
 } from '../domain/workspaces'
@@ -91,6 +90,7 @@ function pickDate(row: UnknownRow, key: string, fallback?: string): string {
 function rowToIdea(row: UnknownRow): Idea {
   return ideaSchema.parse({
     id: pickString(row, 'id'),
+    logicalId: pickString(row, 'logical_id', pickString(row, 'id')),
     workspaceId: pickString(row, 'workspace_id'),
     createdBy: pickString(row, 'created_by'),
     title: pickString(row, 'title'),
@@ -115,6 +115,7 @@ function rowToIdea(row: UnknownRow): Idea {
 function ideaToRow(idea: Idea): Record<string, unknown> {
   return {
     id: idea.id,
+    logical_id: idea.logicalId ?? idea.id,
     workspace_id: idea.workspaceId,
     created_by: idea.createdBy,
     title: idea.title,
@@ -139,6 +140,7 @@ function ideaToRow(idea: Idea): Record<string, unknown> {
 function rowToProject(row: UnknownRow): Project {
   return projectSchema.parse({
     id: pickString(row, 'id'),
+    logicalId: pickString(row, 'logical_id', pickString(row, 'id')),
     workspaceId: pickString(row, 'workspace_id'),
     createdBy: pickString(row, 'created_by'),
     title: pickString(row, 'title'),
@@ -161,6 +163,7 @@ function rowToProject(row: UnknownRow): Project {
 function projectToRow(project: Project): Record<string, unknown> {
   return {
     id: project.id,
+    logical_id: project.logicalId ?? project.id,
     workspace_id: project.workspaceId,
     created_by: project.createdBy,
     title: project.title,
@@ -183,6 +186,7 @@ function projectToRow(project: Project): Record<string, unknown> {
 function rowToTask(row: UnknownRow): Task {
   return taskSchema.parse({
     id: pickString(row, 'id'),
+    logicalId: pickString(row, 'logical_id', pickString(row, 'id')),
     workspaceId: pickString(row, 'workspace_id'),
     createdBy: pickString(row, 'created_by'),
     title: pickString(row, 'title'),
@@ -208,6 +212,7 @@ function rowToTask(row: UnknownRow): Task {
 function taskToRow(task: Task): Record<string, unknown> {
   return {
     id: task.id,
+    logical_id: task.logicalId ?? task.id,
     workspace_id: task.workspaceId,
     created_by: task.createdBy,
     title: task.title,
@@ -233,6 +238,7 @@ function taskToRow(task: Task): Record<string, unknown> {
 function rowToNote(row: UnknownRow): Note {
   return noteSchema.parse({
     id: pickString(row, 'id'),
+    logicalId: pickString(row, 'logical_id', pickString(row, 'id')),
     workspaceId: pickString(row, 'workspace_id'),
     createdBy: pickString(row, 'created_by'),
     title: pickString(row, 'title'),
@@ -254,6 +260,7 @@ function rowToNote(row: UnknownRow): Note {
 function noteToRow(note: Note): Record<string, unknown> {
   return {
     id: note.id,
+    logical_id: note.logicalId ?? note.id,
     workspace_id: note.workspaceId,
     created_by: note.createdBy,
     title: note.title,
@@ -310,30 +317,34 @@ export class SupabaseCloudAdapter implements DBAdapter {
 
   async createWorkspace(input: CreateWorkspaceInput): Promise<WorkspaceRecord> {
     const client = this.requireClient('createWorkspace')
-    const userId = await this.requireUserId(client, 'createWorkspace')
-    const record = createWorkspaceRecord(input, userId)
-    const { error } = await client.from('workspaces').insert({
-      id: record.id,
-      type: record.type,
-      name: record.name,
-      owner_user_id: record.ownerUserId,
-      created_at: record.createdAt,
-      updated_at: record.updatedAt,
+    await this.requireUserId(client, 'createWorkspace')
+    const { data: createdRows, error } = await client.rpc('create_workspace', {
+      requested_name: input.name.trim(),
+      requested_type: input.type,
+      idempotency_key: crypto.randomUUID(),
     })
-    if (error) {
-      logger.error('cloud', 'createWorkspace failed', { error: error.message })
-      throw new Error(`createWorkspace: ${error.message}`)
+    const created = (createdRows as Array<{ workspace_id: string }> | null)?.[0]
+    if (error || !created) {
+      logger.error('cloud', 'createWorkspace failed', { error: error?.message ?? 'No workspace returned.' })
+      throw new Error(`createWorkspace: ${error?.message ?? 'No workspace returned.'}`)
     }
-    const { error: memberError } = await client.from('workspace_members').insert({
-      workspace_id: record.id,
-      user_id: record.ownerUserId,
-      role: 'owner',
-      status: 'active',
+    const { data, error: readError } = await client
+      .from('workspaces')
+      .select('id, type, name, owner_user_id, created_at, updated_at')
+      .eq('id', created.workspace_id)
+      .single()
+    if (readError || !data) {
+      throw new Error(`createWorkspace readback: ${readError?.message ?? 'No workspace returned.'}`)
+    }
+    return workspaceRecordSchema.parse({
+      id: (data as UnknownRow).id,
+      type: (data as UnknownRow).type,
+      name: (data as UnknownRow).name,
+      ownerUserId: (data as UnknownRow).owner_user_id,
+      createdAt: normalizeDate((data as UnknownRow).created_at),
+      updatedAt: normalizeDate((data as UnknownRow).updated_at),
+      isDefault: false,
     })
-    if (memberError) {
-      logger.error('cloud', 'createWorkspace membership insert failed', { error: memberError.message })
-    }
-    return record
   }
 
   async renameWorkspace(id: string, name: string): Promise<WorkspaceRecord> {
@@ -360,14 +371,11 @@ export class SupabaseCloudAdapter implements DBAdapter {
     })
   }
 
-  async deleteWorkspace(id: string): Promise<void> {
-    const client = this.requireClient('deleteWorkspace')
-    await this.requireUserId(client, 'deleteWorkspace')
-    const { error } = await client.from('workspaces').delete().eq('id', id)
-    if (error) {
-      logger.error('cloud', 'deleteWorkspace failed', { error: error.message })
-      throw new Error(`deleteWorkspace: ${error.message}`)
-    }
+  async deleteWorkspace(_id: string): Promise<void> {
+    void _id
+    // Cloud deletion is a delayed, cancelable lifecycle action. Direct adapter
+    // deletion would bypass export/recovery and must stay unavailable.
+    throw new CloudAdapterDisabledError('Cloud workspace deletion must use the dedicated deletion lifecycle flow.')
   }
 
   private requireWorkspace(): string {

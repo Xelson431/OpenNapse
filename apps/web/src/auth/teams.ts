@@ -118,11 +118,10 @@ export async function revokeWorkspaceInvite(inviteId: string): Promise<TeamsOper
 export async function removeWorkspaceMember(workspaceId: string, userId: string): Promise<TeamsOperationResult<true>> {
   try {
     const client = cloud()
-    const { error } = await client
-      .from('workspace_members')
-      .update({ status: 'removed' })
-      .eq('workspace_id', workspaceId)
-      .eq('user_id', userId)
+    const { error } = await client.rpc('remove_workspace_member', {
+      target_workspace_id: workspaceId,
+      target_user_id: userId,
+    })
     if (error) return { ok: false, error: error.message }
     return { ok: true, data: true }
   } catch (error) {

@@ -5,6 +5,7 @@ export const projectStatusSchema = z.enum(['planning', 'active', 'paused', 'ship
 
 export const projectSchema = z.object({
   id: z.string().uuid(),
+  logicalId: z.string().uuid().optional(),
   workspaceId: z.string().min(1),
   createdBy: z.string().min(1),
   title: z.string().trim().min(1).max(180),
@@ -42,8 +43,10 @@ export interface PromoteIdeaInput {
 
 export function createProjectFromIdea(input: PromoteIdeaInput, context: DraftContext): Project {
   const now = new Date().toISOString()
+  const id = crypto.randomUUID()
   return projectSchema.parse({
-    id: crypto.randomUUID(),
+    id,
+    logicalId: id,
     workspaceId: context.workspaceId,
     createdBy: context.createdBy,
     title: input.idea.title,
@@ -61,8 +64,10 @@ export function createProjectFromIdea(input: PromoteIdeaInput, context: DraftCon
 
 export function createProjectDraft(input: CreateProjectInput, context: DraftContext): Project {
   const now = new Date().toISOString()
+  const id = crypto.randomUUID()
   return projectSchema.parse({
-    id: crypto.randomUUID(),
+    id,
+    logicalId: id,
     workspaceId: context.workspaceId,
     createdBy: context.createdBy,
     title: input.title,

@@ -1,7 +1,7 @@
 import { getSupabaseEnv } from '../config/env'
 import type { AuthStatus } from '../auth/use-auth-status'
 
-export type SyncStatus = 'local-only' | 'synced' | 'syncing' | 'offline'
+export type SyncStatus = 'local-only' | 'connected' | 'syncing' | 'offline'
 
 export type CloudConnectionStatus = {
   mode: 'idle' | 'connecting' | 'ready' | 'failed'
@@ -49,9 +49,9 @@ export function useSyncStatus(
       }
     }
     return {
-      status: 'synced' as SyncStatus,
-      label: 'Synced',
-      description: cloudConnection.description ?? workspaceBootstrap?.description ?? 'Connected.',
+      status: 'connected' as SyncStatus,
+      label: 'Cloud connected',
+      description: 'Cloud access is connected. Cross-device sync is not available yet.',
       syncNow: async () => undefined,
     }
   }
@@ -59,8 +59,8 @@ export function useSyncStatus(
   if (env.configured) {
     return {
       status: 'local-only' as SyncStatus,
-      label: 'Sign in to sync',
-      description: `Signed out. Cloud data is synced when you sign in.`,
+      label: 'Sign in for cloud access',
+      description: 'Sign in to access a cloud workspace. Cross-device sync is not available yet.',
       syncNow: async () => undefined,
     }
   }

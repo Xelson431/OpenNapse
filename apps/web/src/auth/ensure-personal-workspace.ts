@@ -7,8 +7,6 @@ export type PersonalWorkspaceBootstrapResult =
   | { ok: true; workspaceId: string; message: string }
   | { ok: false; message: string }
 
-type ExistingWorkspace = { id: string }
-
 export async function ensurePersonalWorkspace(client: SupabaseClient, user: BootstrapUser): Promise<PersonalWorkspaceBootstrapResult> {
   const plan = createPersonalWorkspaceBootstrapPlan({ user })
 
@@ -22,56 +20,23 @@ export async function ensurePersonalWorkspace(client: SupabaseClient, user: Boot
     return { ok: false, message: `Profile bootstrap failed: ${profileError.message}` }
   }
 
-  logger.debug('bootstrap', 'Looking up existing personal workspace')
-  const { data: existingRows, error: workspaceLookupError } = await client
-    .from('workspaces')
-    .select('id')
-    .eq('owner_user_id', user.id)
-    .eq('type', 'personal')
-    .limit(1)
-
-  if (workspaceLookupError) {
-    logger.error('bootstrap', `Workspace lookup failed`, { error: workspaceLookupError.message })
-    return { ok: false, message: `Workspace lookup failed: ${workspaceLookupError.message}` }
+  logger.debug('bootstrap', 'Ensuring transactional personal workspace')
+  const { data, error } = await client.rpc('create_workspace', {
+    requested_name: plan.workspace.name,
+    requested_type: 'personal',
+    idempotency_key: plan.workspace.id,
+  })
+  const row = (data as Array<{ workspace_id: string; created: boolean }> | null)?.[0]
+  if (error || !row) {
+    logger.error('bootstrap', 'Transactional workspace bootstrap failed', { error: error?.message })
+    return { ok: false, message: `Workspace bootstrap failed: ${error?.message ?? 'No workspace returned.'}` }
   }
 
-  const existingWorkspace = (existingRows as ExistingWorkspace[] | null)?.[0]
-  const workspaceId = existingWorkspace?.id ?? plan.workspace.id
-
-  if (!existingWorkspace) {
-    logger.debug('bootstrap', 'Creating new personal workspace')
-    const { error: workspaceInsertError } = await client
-      .from('workspaces')
-      .insert(plan.workspace)
-
-    if (workspaceInsertError) {
-      logger.error('bootstrap', `Workspace insert failed`, { error: workspaceInsertError.message })
-      return { ok: false, message: `Workspace bootstrap failed: ${workspaceInsertError.message}` }
-    }
-  } else {
-    logger.debug('bootstrap', 'Personal workspace already exists', { workspaceId })
-  }
-
-  logger.debug('bootstrap', 'Upserting workspace membership')
-  const { error: membershipError } = await client
-    .from('workspace_members')
-    .upsert({
-      ...plan.membership,
-      workspace_id: workspaceId,
-    }, { onConflict: 'workspace_id,user_id' })
-
-  if (membershipError) {
-    logger.error('bootstrap', `Membership upsert failed`, { error: membershipError.message })
-    return { ok: false, message: `Workspace membership bootstrap failed: ${membershipError.message}` }
-  }
-
-  logger.info('bootstrap', 'Bootstrap completed successfully', { workspaceId, existing: !!existingWorkspace })
+  logger.info('bootstrap', 'Bootstrap completed successfully', { workspaceId: row.workspace_id, created: row.created })
   return {
     ok: true,
-    workspaceId,
-    message: existingWorkspace
-      ? 'Personal workspace confirmed.'
-      : 'Personal workspace created.',
+    workspaceId: row.workspace_id,
+    message: row.created ? 'Personal workspace created.' : 'Personal workspace confirmed.',
   }
 }
 
