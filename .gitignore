@@ -154,6 +154,7 @@ playwright-report/
 opencode.json
 .opencode/
 .supraspace/
+.slim/deepwork/
 
 # This repo uses pnpm; reject stray npm/yarn lockfiles
 package-lock.json

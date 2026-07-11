@@ -6,7 +6,8 @@ import type { CreateWorkspaceInput, WorkspaceRecord } from '../domain/workspaces
 
 export interface SyncOutboxEntry {
   id: string
-  tableName: 'ideas' | 'projects' | 'tasks' | 'notes' | 'links' | 'backup'
+  workspaceId: string
+  tableName: 'ideas' | 'projects' | 'tasks' | 'notes' | 'backup'
   recordId: string
   operation: 'insert' | 'update' | 'delete'
   payload: unknown

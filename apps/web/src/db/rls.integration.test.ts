@@ -174,4 +174,44 @@ describeRls('Supabase RLS integration', () => {
     expect(readError).toBeNull()
     expect(visible).toHaveLength(0)
   }, 60_000)
+
+  it('prevents direct owner removal and deletion-state injection', async () => {
+    const { error: ownerRemovalError } = await userA!.client.from('workspace_members')
+      .update({ status: 'removed' }).eq('workspace_id', userA!.workspaceId).eq('user_id', userA!.id)
+    expect(ownerRemovalError).toBeTruthy()
+
+    const { error: injectedDeletionError } = await userA!.client.from('deletion_requests').insert({
+      scope: 'workspace', workspace_id: userA!.workspaceId, requested_by: userA!.id,
+      status: 'approved', confirmation_token: crypto.randomUUID(), scheduled_for: new Date().toISOString(),
+    })
+    expect(injectedDeletionError).toBeTruthy()
+  }, 60_000)
+
+  it('rejects cross-workspace references', async () => {
+    const { data: foreignProject, error: projectError } = await userA!.client.from('projects').insert(projectRow(userA!)).select('id').single()
+    expect(projectError).toBeNull()
+    const { error } = await userB!.client.from('tasks').insert({
+      workspace_id: userB!.workspaceId, created_by: userB!.id, project_id: foreignProject!.id,
+      title: 'Invalid cross-workspace task', client_id: 'rls-test', device_id: 'rls-test-device',
+    })
+    expect(error).toBeTruthy()
+  }, 60_000)
+
+  it('deduplicates replayed sync mutations', async () => {
+    const mutationId = crypto.randomUUID()
+    const logicalId = crypto.randomUUID()
+    const args = {
+      target_workspace_id: userA!.workspaceId,
+      mutations: [{ mutationId, entityType: 'projects', logicalId, operation: 'upsert', expectedVersion: 0, payload: {
+        title: 'Idempotent project', description: '', whyNow: 'Replay safety', firstStep: 'Apply once', doneLooksLike: 'One change row', status: 'planning', color: '#78716C', clientId: 'rls-test', deviceId: 'rls-test-device',
+      } }],
+    }
+    const first = await userA!.client.rpc('apply_sync_mutations', args)
+    const replay = await userA!.client.rpc('apply_sync_mutations', args)
+    expect(first.error).toBeNull()
+    expect(replay.error).toBeNull()
+    expect(replay.data).toEqual(first.data)
+    const { count } = await userA!.client.from('sync_changes').select('cursor', { count: 'exact', head: true }).eq('mutation_id', mutationId)
+    expect(count).toBe(1)
+  }, 60_000)
 })

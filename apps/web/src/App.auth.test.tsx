@@ -46,7 +46,7 @@ vi.mock('./config/env', () => ({
 }))
 
 vi.mock('./sync/use-sync', () => ({
-  useSyncStatus: vi.fn(() => ({ label: mockSyncLabel, description: mockSyncDescription, synced: mockSyncLabel === 'Synced' })),
+  useSyncStatus: vi.fn(() => ({ label: mockSyncLabel, description: mockSyncDescription, connected: mockSyncLabel === 'Cloud connected' })),
 }))
 
 const configuredSupabaseEnv: ResolvedSupabaseEnv = {
@@ -122,7 +122,7 @@ describe('Signed-in auth flows', () => {
     mockBillingEnv = unconfiguredBillingEnv
     mockAuthStatus = signedInStatus
     mockBootstrap = readyBootstrap
-    mockSyncLabel = 'Synced'
+    mockSyncLabel = 'Cloud connected'
   })
 
   it('shows signed-in state in Account tab with sign-out button', async () => {
@@ -174,9 +174,9 @@ describe('Signed-in auth flows', () => {
     expect(screen.queryByRole('button', { name: /send magic link/i })).not.toBeInTheDocument()
   })
 
-  it('shows synced pill in toolbar when signed in', () => {
+  it('shows cloud-connected pill without claiming sync when signed in', () => {
     render(<App />)
-    expect(screen.getAllByText('Synced').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Cloud connected').length).toBeGreaterThanOrEqual(1)
   })
 
   it('shows sync failure state when cloud connection fails', () => {
@@ -341,7 +341,7 @@ describe('Auth state transitions', () => {
     mockBillingEnv = configuredBillingEnv
     mockAuthStatus = signedInStatus
     mockBootstrap = readyBootstrap
-    mockSyncLabel = 'Synced'
+    mockSyncLabel = 'Cloud connected'
   })
 
   it('settings dialog survives rapid tab switching', async () => {

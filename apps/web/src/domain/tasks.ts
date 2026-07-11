@@ -7,6 +7,7 @@ export const taskPrioritySchema = z.enum(['low', 'medium', 'high', 'urgent'])
 
 export const taskSchema = z.object({
   id: z.string().uuid(),
+  logicalId: z.string().uuid().optional(),
   workspaceId: z.string().min(1),
   createdBy: z.string().min(1),
   title: z.string().trim().min(1).max(220),
@@ -55,8 +56,10 @@ export const taskColumns: Array<{ id: TaskColumn; label: string }> = [
 
 export function createFirstStepTask(project: Project): Task {
   const now = new Date().toISOString()
+  const id = crypto.randomUUID()
   return taskSchema.parse({
-    id: crypto.randomUUID(),
+    id,
+    logicalId: id,
     workspaceId: project.workspaceId,
     createdBy: project.createdBy,
     title: project.firstStep,
@@ -76,8 +79,10 @@ export function createFirstStepTask(project: Project): Task {
 
 export function createTaskDraft(input: CreateTaskInput, context: DraftContext): Task {
   const now = new Date().toISOString()
+  const id = crypto.randomUUID()
   return taskSchema.parse({
-    id: crypto.randomUUID(),
+    id,
+    logicalId: id,
     workspaceId: context.workspaceId,
     createdBy: context.createdBy,
     title: input.title,

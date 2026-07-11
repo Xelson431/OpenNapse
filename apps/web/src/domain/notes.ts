@@ -12,6 +12,7 @@ export const voiceRecordingSchema = z.object({
 
 export const noteSchema = z.object({
   id: z.string().uuid(),
+  logicalId: z.string().uuid().optional(),
   workspaceId: z.string().min(1),
   createdBy: z.string().min(1),
   title: z.string().trim().min(1).max(180),
@@ -43,8 +44,10 @@ export interface UpsertNoteInput {
 
 export function createNoteDraft(input: UpsertNoteInput, context: DraftContext): Note {
   const now = new Date().toISOString()
+  const id = input.id ?? crypto.randomUUID()
   return noteSchema.parse({
-    id: input.id ?? crypto.randomUUID(),
+    id,
+    logicalId: id,
     workspaceId: context.workspaceId,
     createdBy: context.createdBy,
     title: input.title,

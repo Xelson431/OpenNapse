@@ -52,32 +52,12 @@ Deno.serve(async (request) => {
     return json(403, { error: 'Invite email does not match your account.' })
   }
 
-  const { error: memberError } = await admin
-    .from('workspace_members')
-    .upsert(
-      {
-        workspace_id: invite.workspace_id,
-        user_id: user.id,
-        role: invite.role,
-        status: 'active',
-      },
-      { onConflict: 'workspace_id,user_id' },
-    )
-  if (memberError) return json(400, { error: memberError.message })
-
-  await admin
-    .from('workspace_invites')
-    .update({ status: 'accepted', accepted_at: new Date().toISOString() })
-    .eq('id', invite.id)
-
-  await admin.from('audit_logs').insert({
-    actor_user_id: user.id,
-    workspace_id: invite.workspace_id,
-    action: 'invite.accepted',
-    target_type: 'workspace_invite',
-    target_id: invite.id,
-    metadata: { role: invite.role },
+  const { data: acceptedRows, error: acceptError } = await admin.rpc('accept_workspace_invite', {
+    target_invite_id: invite.id,
+    target_user_id: user.id,
   })
+  const accepted = (acceptedRows as Array<{ workspace_id: string; role: string }> | null)?.[0]
+  if (acceptError || !accepted) return json(400, { error: acceptError?.message ?? 'Invite acceptance failed.' })
 
-  return json(200, { ok: true, workspaceId: invite.workspace_id, role: invite.role })
+  return json(200, { ok: true, workspaceId: accepted.workspace_id, role: accepted.role })
 })
