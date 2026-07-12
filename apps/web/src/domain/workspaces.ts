@@ -41,9 +41,9 @@ export const workspaceModes: Record<WorkspaceMode, { label: string; badge: strin
     description: 'Personal workspaces are private by default. Your content is stored locally and can be accessed through a connected cloud workspace.',
   },
   'team-preview': {
-    label: 'Team preview',
-    badge: 'Locked until Supabase RLS',
-    description: 'Team workspaces require authenticated cloud sync, workspace scoping, and Row Level Security before shared writes are enabled.',
+    label: 'Team',
+    badge: 'Cloud workspace',
+    description: 'Team workspaces are shared through a connected cloud backend, with per-member roles and access control.',
     disabled: true,
   },
 }
@@ -56,7 +56,7 @@ export function createActiveWorkspaceFromRecord(record: WorkspaceRecord): Active
     type: record.type,
     mode,
     name: record.name,
-    badge: record.type === 'team' ? 'Team · cloud required' : modeMeta.badge,
+    badge: record.type === 'team' ? 'Team · cloud' : modeMeta.badge,
     description: modeMeta.description,
     syncEnabled: false,
   }

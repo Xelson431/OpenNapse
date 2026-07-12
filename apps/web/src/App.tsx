@@ -11,7 +11,7 @@ import { acceptInvite, inviteWorkspaceMember, listWorkspaceInvites, listWorkspac
 import { getTodayBalance, listRecentUsage, type DailyCreditBalance, type UsageEvent } from './auth/credits'
 import { createBillingPortalSession, createCheckoutSession, useSubscriptionStatus } from './auth/billing'
 import { listAuditLog, type AuditEntry } from './auth/audit'
-import { cancelDeletion, requestDeletion } from './auth/lifecycle'
+import { cancelDeletion, requestDeletion, listDeletionRequests, transferWorkspaceOwnership } from './auth/lifecycle'
 import { Icon, type IconName } from './components/Icon'
 import { PricingModal } from './components/PricingModal'
 import { fetchProfile, updateDisplayName } from './auth/profile'
@@ -24,7 +24,7 @@ import { MAX_VOICE_RECORDING_DATA_URL_LENGTH, type Note, type VoiceRecording } f
 import type { Project } from './domain/projects'
 import { calculateStats } from './domain/stats'
 import { taskColumns, type CreateTaskInput, type Task, type TaskColumn, type UpdateTaskInput } from './domain/tasks'
-import { LOCAL_PERSONAL_WORKSPACE_ID, createActiveWorkspace, createActiveWorkspaceFromRecord, workspaceModes, type ActiveWorkspace, type WorkspaceMode } from './domain/workspaces'
+import { LOCAL_PERSONAL_WORKSPACE_ID, createActiveWorkspace, createActiveWorkspaceFromRecord, workspaceModes, type ActiveWorkspace, type WorkspaceMode, type WorkspaceRecord } from './domain/workspaces'
 import { IDEA_DRAG_MIME, hasIdeaDragPayload, readIdeaDragPayload } from './lib/drag'
 import { useSyncStatus, type CloudConnectionStatus } from './sync/use-sync'
 import { useIdeasStore } from './stores/use-ideas-store'
@@ -133,7 +133,7 @@ function App() {
     return 'light'
   })
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('personal')
-  const { workspaces, activeWorkspaceId, loadWorkspaces, setActiveWorkspace, createWorkspace: createWorkspaceRecord } = useWorkspacesStore()
+  const { workspaces, activeWorkspaceId, loadWorkspaces, setActiveWorkspace, createWorkspace: createWorkspaceRecord, renameWorkspace: renameWorkspaceRecord, deleteWorkspace: deleteWorkspaceRecord } = useWorkspacesStore()
 
   const [isCaptureOpen, setIsCaptureOpen] = useState(false)
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false)
@@ -349,6 +349,8 @@ function App() {
       if (result.ok) {
         await loadWorkspaces()
         setActiveWorkspace(result.data.workspaceId)
+      } else {
+        logger.warn('teams', 'Invite acceptance failed', { error: result.error })
       }
       params.delete('invite')
       const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}${window.location.hash}`
@@ -739,6 +741,11 @@ function App() {
           settingsSavedAt={settingsSavedAt}
           allowClearData={authStatus.mode !== 'signed-in'}
           onClearData={async () => { await clearIdeas(); await clearWorkspace(); await loadIdeas(); await loadWorkspace() }}
+          workspaces={visibleWorkspaces}
+          activeWorkspaceId={activeWorkspaceId}
+          onSelectWorkspace={setActiveWorkspace}
+          onRenameWorkspace={async (id, name) => { await renameWorkspaceRecord(id, name) }}
+          onDeleteWorkspace={async (id) => { await deleteWorkspaceRecord(id); await loadIdeas(); await loadWorkspace() }}
           onClose={() => setIsSettingsOpen(false)}
         />
       )}
@@ -2914,7 +2921,7 @@ function LogViewer() {
 }
 
 
-function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, onWorkspaceModeChange, supabaseEnv, authStatus, workspaceBootstrap, aiSettings, onAISettingsChange, sessionKeys, onSessionKeyChange, acceptedPreviewHash, onAcceptPreview, settingsSavedAt, allowClearData, onClearData, onClose }: {
+function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, onWorkspaceModeChange, supabaseEnv, authStatus, workspaceBootstrap, aiSettings, onAISettingsChange, sessionKeys, onSessionKeyChange, acceptedPreviewHash, onAcceptPreview, settingsSavedAt, allowClearData, onClearData, workspaces, activeWorkspaceId, onSelectWorkspace, onRenameWorkspace, onDeleteWorkspace, onClose }: {
   theme: ThemeMode
   onThemeChange: (theme: ThemeMode) => void
   activeWorkspace: ActiveWorkspace
@@ -2932,6 +2939,11 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
   settingsSavedAt: string | null
   allowClearData: boolean
   onClearData: () => Promise<void>
+  workspaces: WorkspaceRecord[]
+  activeWorkspaceId: string
+  onSelectWorkspace: (workspaceId: string) => void
+  onRenameWorkspace: (workspaceId: string, name: string) => Promise<void>
+  onDeleteWorkspace: (workspaceId: string) => Promise<void>
   onClose: () => void
 }) {
   const [statusMessage, setStatusMessage] = useState('')
@@ -2957,6 +2969,27 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
     })
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [authStatus.mode])
+
+  useEffect(() => {
+    if (authStatus.mode !== 'signed-in' || allowClearData) return
+    let active = true
+    void (async () => {
+      try {
+        const requests = await listDeletionRequests()
+        if (!active) return
+        const pending = requests.find(
+          (request) => request.status === 'pending' && request.scope === 'workspace' && request.workspaceId === activeWorkspace.id,
+        )
+        if (pending) {
+          // Token is not re-fetchable; the user keeps it from the original request.
+          setDeletionRequest({ requestId: pending.id, confirmationToken: '', scheduledFor: pending.scheduledFor })
+        }
+      } catch {
+        // Non-fatal: the lifecycle panel still lets the user request deletion.
+      }
+    })()
+    return () => { active = false }
+  }, [authStatus.mode, allowClearData, activeWorkspace.id])
 
   async function saveDisplayName(name: string) {
     setDisplayNameError('')
@@ -2999,6 +3032,7 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
   }, [activeProviderId, activeModelId, activeBaseUrlOverride])
   const billingEnv = useMemo(() => getBillingEnv(), [])
   const isHosted = billingEnv.configured
+  const teamWorkspacesAvailable = ENABLE_TEAM_WORKSPACES && supabaseEnv.configured && authStatus.mode === 'signed-in'
   const [settingsTab, setSettingsTab] = useState<'account' | 'ai' | 'data' | 'billing' | 'advanced'>('account')
   const statusToShow = statusMessage
   const canRequestMagicLink = supabaseEnv.configured && authStatus.mode !== 'loading' && authStatus.mode !== 'signed-in' && authEmail.trim().length > 0
@@ -3351,7 +3385,7 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
             <div className="settings-grid">
               <section className="settings-panel" aria-labelledby="workspace-settings-title">
                 <h4 id="workspace-settings-title">Workspace</h4>
-                <p className="settings-muted">{isHosted ? 'Personal workspaces keep your content separate. Teams are reserved for the hosted product.' : 'Personal is private by default. Teams are disabled in local builds and reserved for the future hosted product.'}</p>
+                <p className="settings-muted">{teamWorkspacesAvailable ? 'Personal workspaces keep your content separate. Team workspaces let you invite collaborators.' : 'Personal is private by default. Team workspaces become available when you sign in to a cloud backend.'}</p>
                 <div className="segmented-control segmented-control--wide" role="group" aria-label="Workspace mode">
                   <button type="button" className={workspaceMode === 'personal' ? 'active' : ''} onClick={() => onWorkspaceModeChange('personal')}>Personal</button>
                   <button type="button" disabled title={workspaceModes['team-preview'].description}>Team</button>
@@ -3362,6 +3396,16 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
                 ) : null}
                 <p className="settings-muted">{activeWorkspace.description}</p>
               </section>
+
+              <WorkspaceManagementPanel
+                workspaces={workspaces}
+                activeWorkspaceId={activeWorkspaceId}
+                authStatus={authStatus}
+                allowImmediateDelete={allowClearData}
+                onSelectWorkspace={onSelectWorkspace}
+                onRenameWorkspace={onRenameWorkspace}
+                onDeleteWorkspace={onDeleteWorkspace}
+              />
 
               <section className="settings-panel" aria-labelledby="factory-reset-title">
                 <h4 id="factory-reset-title">Factory reset</h4>
@@ -3390,15 +3434,23 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
                       <p className="settings-status">Scheduled for {new Date(deletionRequest.scheduledFor).toLocaleString()}.</p>
                       <label className="field"><span>Cancellation token</span><input value={deletionToken} onChange={(event) => setDeletionToken(event.target.value)} /></label>
                       <div className="settings-actions"><button type="button" className="btn btn-secondary" onClick={async () => {
-                        await cancelDeletion(deletionRequest.requestId, deletionToken.trim())
-                        setDeletionRequest(null); setDeletionToken(''); setClearDataMessage('Cloud deletion request cancelled.')
+                        try {
+                          await cancelDeletion(deletionRequest.requestId, deletionToken.trim())
+                          setDeletionRequest(null); setDeletionToken(''); setClearDataMessage('Cloud deletion request cancelled.')
+                        } catch (err) {
+                          setClearDataMessage(err instanceof Error ? err.message : 'Deletion cancellation failed.')
+                        }
                       }}>Cancel deletion</button></div>
                     </>
                   ) : (
                     <div className="settings-actions"><button type="button" className="btn btn-ghost" onClick={async () => {
                       if (!confirm(`Schedule deletion of ${activeWorkspace.name} in 30 days? Export your data first.`)) return
-                      const created = await requestDeletion('workspace', activeWorkspace.id)
-                      setDeletionRequest(created); setDeletionToken(created.confirmationToken)
+                      try {
+                        const created = await requestDeletion('workspace', activeWorkspace.id)
+                        setDeletionRequest(created); setDeletionToken(created.confirmationToken)
+                      } catch (err) {
+                        setClearDataMessage(err instanceof Error ? err.message : 'Deletion request failed.')
+                      }
                     }}>Request cloud deletion</button></div>
                   )}
                   {deletionRequest ? <p className="settings-muted">Keep this token to cancel the request: <code>{deletionRequest.confirmationToken}</code></p> : null}
@@ -3639,6 +3691,151 @@ function BillingSettingsPanel({ activeWorkspace, authStatus, workspaceBootstrap 
   )
 }
 
+function WorkspaceManagementPanel({ workspaces, activeWorkspaceId, authStatus, allowImmediateDelete, onSelectWorkspace, onRenameWorkspace, onDeleteWorkspace }: {
+  workspaces: WorkspaceRecord[]
+  activeWorkspaceId: string
+  authStatus: AuthStatus
+  allowImmediateDelete: boolean
+  onSelectWorkspace: (workspaceId: string) => void
+  onRenameWorkspace: (workspaceId: string, name: string) => Promise<void>
+  onDeleteWorkspace: (workspaceId: string) => Promise<void>
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [draftName, setDraftName] = useState('')
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [message, setMessage] = useState('')
+  const [tone, setTone] = useState<'info' | 'error' | 'success'>('info')
+  const [deletion, setDeletion] = useState<{ requestId: string; confirmationToken: string; scheduledFor: string; workspaceId: string } | null>(null)
+
+  const isCloud = authStatus.mode === 'signed-in'
+
+  function report(text: string, nextTone: 'info' | 'error' | 'success' = 'info') {
+    setTone(nextTone)
+    setMessage(text)
+  }
+
+  async function saveRename(id: string) {
+    const trimmed = draftName.trim()
+    if (!trimmed) { setEditingId(null); return }
+    setBusyId(id)
+    try {
+      await onRenameWorkspace(id, trimmed)
+      setEditingId(null)
+      report('Workspace renamed.', 'success')
+    } catch (err) {
+      report(err instanceof Error ? err.message : 'Rename failed.', 'error')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function handleDelete(workspace: WorkspaceRecord) {
+    setBusyId(workspace.id)
+    setMessage('')
+    try {
+      if (isCloud && !allowImmediateDelete) {
+        if (!confirm(`Schedule deletion of "${workspace.name}" in 30 days? Export your data first. You can cancel within the window.`)) {
+          setBusyId(null)
+          return
+        }
+        const created = await requestDeletion('workspace', workspace.id)
+        setDeletion({ ...created, workspaceId: workspace.id })
+        report('Cloud deletion scheduled for 30 days out. Keep the cancellation token below.', 'success')
+      } else {
+        if (!confirm(`Delete "${workspace.name}"? This permanently removes its ideas, projects, tasks, and notes. This cannot be undone.`)) {
+          setBusyId(null)
+          return
+        }
+        await onDeleteWorkspace(workspace.id)
+        report('Workspace deleted.', 'success')
+      }
+    } catch (err) {
+      report(err instanceof Error ? err.message : 'Delete failed.', 'error')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function cancelScheduledDeletion(token: string) {
+    if (!deletion) return
+    setBusyId(deletion.workspaceId)
+    try {
+      await cancelDeletion(deletion.requestId, token.trim())
+      setDeletion(null)
+      report('Cloud deletion request cancelled.', 'success')
+    } catch (err) {
+      report(err instanceof Error ? err.message : 'Cancellation failed.', 'error')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  return (
+    <section className="settings-panel" aria-labelledby="workspace-management-title">
+      <h4 id="workspace-management-title">Manage workspaces</h4>
+      <p className="settings-muted">
+        {isCloud
+          ? 'Rename or delete any workspace you own. Cloud deletions are delayed 30 days and can be cancelled.'
+          : 'Rename or delete your local workspaces. Deletion is immediate and permanent.'}
+      </p>
+      <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {workspaces.map((workspace) => {
+          const isActive = workspace.id === activeWorkspaceId
+          const isDefaultLocal = workspace.id === LOCAL_PERSONAL_WORKSPACE_ID
+          const isEditing = editingId === workspace.id
+          const busy = busyId === workspace.id
+          return (
+            <li key={workspace.id} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 13 }}>
+              {isEditing ? (
+                <>
+                  <input
+                    value={draftName}
+                    autoFocus
+                    maxLength={80}
+                    onChange={(event) => setDraftName(event.target.value)}
+                    onKeyDown={(event) => { if (event.key === 'Enter') void saveRename(workspace.id); if (event.key === 'Escape') setEditingId(null) }}
+                    style={{ flex: '1 1 200px' }}
+                  />
+                  <button type="button" className="btn btn-primary btn-compact" disabled={busy} onClick={() => void saveRename(workspace.id)}>Save</button>
+                  <button type="button" className="btn btn-ghost btn-compact" disabled={busy} onClick={() => setEditingId(null)}>Cancel</button>
+                </>
+              ) : (
+                <>
+                  <span style={{ flex: '1 1 200px' }}>
+                    <strong>{workspace.name}</strong>
+                    <em style={{ color: 'var(--muted)', marginLeft: 6 }}>
+                      {workspace.type === 'team' ? 'team' : 'personal'}{isActive ? ' · active' : ''}
+                    </em>
+                  </span>
+                  {!isActive ? (
+                    <button type="button" className="btn btn-ghost btn-compact" disabled={busy} onClick={() => onSelectWorkspace(workspace.id)}>Open</button>
+                  ) : null}
+                  <button type="button" className="btn btn-ghost btn-compact" disabled={busy} onClick={() => { setEditingId(workspace.id); setDraftName(workspace.name) }}>Rename</button>
+                  {!isDefaultLocal ? (
+                    <button type="button" className="btn btn-ghost btn-compact" disabled={busy} onClick={() => void handleDelete(workspace)}>
+                      {isCloud && !allowImmediateDelete ? 'Schedule deletion' : 'Delete'}
+                    </button>
+                  ) : null}
+                </>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+      {deletion ? (
+        <div className="settings-panel" style={{ marginTop: 10, marginBottom: 0 }}>
+          <p className="settings-status">Deletion scheduled for {new Date(deletion.scheduledFor).toLocaleString()}.</p>
+          <p className="settings-muted">Keep this token to cancel: <code>{deletion.confirmationToken}</code></p>
+          <div className="settings-actions">
+            <button type="button" className="btn btn-secondary btn-compact" onClick={() => void cancelScheduledDeletion(deletion.confirmationToken)}>Cancel deletion</button>
+          </div>
+        </div>
+      ) : null}
+      {message ? <p className={`settings-status settings-status--${tone}`}>{message}</p> : null}
+    </section>
+  )
+}
+
 function TeamSettingsPanel({ activeWorkspace, supabaseEnv, authStatus, teamFeaturesEnabled }: {
   activeWorkspace: ActiveWorkspace
   supabaseEnv: ResolvedSupabaseEnv
@@ -3699,7 +3896,7 @@ function TeamSettingsPanel({ activeWorkspace, supabaseEnv, authStatus, teamFeatu
     const result = await revokeWorkspaceInvite(inviteId)
     setIsBusy(false)
     if (result.ok) {
-      setInvites((current) => current.map((item) => (item.id === inviteId ? { ...item, status: 'revoked' } : item)))
+      setInvites((current) => current.filter((item) => item.id !== inviteId))
     } else {
       setStatusTone('error')
       setStatus(result.error)
@@ -3711,18 +3908,39 @@ function TeamSettingsPanel({ activeWorkspace, supabaseEnv, authStatus, teamFeatu
     const result = await removeWorkspaceMember(activeWorkspace.id, userId)
     setIsBusy(false)
     if (result.ok) {
-      setMembers((current) => current.map((member) => (member.userId === userId ? { ...member, status: 'removed' } : member)))
+      setMembers((current) => current.filter((member) => member.userId !== userId))
     } else {
       setStatusTone('error')
       setStatus(result.error)
     }
   }
 
+  async function handleTransferOwnership(userId: string, email: string | undefined) {
+    if (!confirm(`Transfer ownership of "${activeWorkspace.name}" to ${email ?? userId.slice(0, 8)}? You will become an admin and cannot undo this yourself.`)) return
+    setIsBusy(true)
+    try {
+      await transferWorkspaceOwnership(activeWorkspace.id, userId)
+      const refreshed = await listWorkspaceMembers(activeWorkspace.id)
+      if (refreshed.ok) setMembers(refreshed.data)
+      setStatusTone('success')
+      setStatus('Ownership transferred.')
+    } catch (err) {
+      setStatusTone('error')
+      setStatus(err instanceof Error ? err.message : 'Ownership transfer failed.')
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  const currentUserId = authStatus.userId
+  const isOwner = members.some((member) => member.userId === currentUserId && member.role === 'owner' && member.status === 'active')
+  const activeMembers = members.filter((member) => member.status === 'active')
+
   return (
     <section className="settings-panel" aria-labelledby="team-settings-title">
       <h4 id="team-settings-title">Team settings</h4>
       {!teamFeaturesEnabled ? (
-        <p className="settings-muted">Teams are disabled in the local app. They will belong to the future hosted OpenNapse plan, where shared workspaces, invites, billing, and RLS-backed sync can be managed safely.</p>
+        <p className="settings-muted">Team workspaces are available once you sign in to a connected cloud backend, where shared workspaces, invites, and role-based access can be managed.</p>
       ) : !supabaseEnv.configured ? (
         <p className="settings-muted">Team features require the hosted Supabase path. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then sign in.</p>
       ) : authStatus.mode !== 'signed-in' ? (
@@ -3753,32 +3971,45 @@ function TeamSettingsPanel({ activeWorkspace, supabaseEnv, authStatus, teamFeatu
             </div>
           </form>
           <div className="settings-row settings-row--stack">
-            <span>Pending invites</span>
+            <span>Invites</span>
             {invites.length === 0 ? <small style={{ color: 'var(--muted)' }}>No invites yet.</small> : (
               <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {invites.map((invite) => (
-                  <li key={invite.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 13 }}>
-                    <span>{invite.email} · <em style={{ color: 'var(--muted)' }}>{invite.role} · {invite.status}</em></span>
-                    {invite.status === 'pending' ? (
-                      <button type="button" className="btn btn-ghost btn-compact" onClick={() => void handleRevoke(invite.id)} disabled={isBusy}>Revoke</button>
-                    ) : null}
-                  </li>
-                ))}
+                {invites.map((invite) => {
+                  const isExpired = invite.status === 'pending' && new Date(invite.expiresAt).getTime() < Date.now()
+                  const statusLabel = isExpired ? 'expired' : invite.status
+                  const statusColor = statusLabel === 'accepted' ? 'var(--accent)' : statusLabel === 'pending' ? 'var(--muted)' : 'var(--danger, #b91c1c)'
+                  return (
+                    <li key={invite.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 13 }}>
+                      <span>{invite.email} · <em style={{ color: 'var(--muted)' }}>{invite.role}</em> · <em style={{ color: statusColor }}>{statusLabel}</em></span>
+                      {invite.status === 'pending' && !isExpired ? (
+                        <button type="button" className="btn btn-ghost btn-compact" onClick={() => void handleRevoke(invite.id)} disabled={isBusy}>Revoke</button>
+                      ) : null}
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </div>
           <div className="settings-row settings-row--stack">
             <span>Members</span>
-            {members.length === 0 ? <small style={{ color: 'var(--muted)' }}>No members loaded yet.</small> : (
+            {activeMembers.length === 0 ? <small style={{ color: 'var(--muted)' }}>No members loaded yet.</small> : (
               <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {members.map((member) => (
-                  <li key={member.userId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 13 }}>
-                    <span>{member.email ?? member.userId.slice(0, 8)} · <em style={{ color: 'var(--muted)' }}>{member.role} · {member.status}</em></span>
-                    {member.status === 'active' && member.role !== 'owner' ? (
-                      <button type="button" className="btn btn-ghost btn-compact" onClick={() => void handleRemove(member.userId)} disabled={isBusy}>Remove</button>
-                    ) : null}
-                  </li>
-                ))}
+                {activeMembers.map((member) => {
+                  const isSelf = member.userId === currentUserId
+                  return (
+                    <li key={member.userId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 13 }}>
+                      <span>{member.email ?? member.userId.slice(0, 8)}{isSelf ? ' (you)' : ''} · <em style={{ color: 'var(--muted)' }}>{member.role}</em></span>
+                      <span style={{ display: 'flex', gap: 6 }}>
+                        {isOwner && !isSelf && member.role !== 'owner' ? (
+                          <button type="button" className="btn btn-ghost btn-compact" onClick={() => void handleTransferOwnership(member.userId, member.email)} disabled={isBusy}>Make owner</button>
+                        ) : null}
+                        {member.role !== 'owner' && !isSelf ? (
+                          <button type="button" className="btn btn-ghost btn-compact" onClick={() => void handleRemove(member.userId)} disabled={isBusy}>Remove</button>
+                        ) : null}
+                      </span>
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </div>
@@ -3825,7 +4056,7 @@ function CreateWorkspaceModal({ allowTeamWorkspaces, onCreate, onClose }: {
         </div>
         <form className="settings-panel" onSubmit={handleSubmit}>
           <p className="settings-muted">
-            Each workspace is its own container for ideas, projects, tasks, and notes. Personal workspaces are private by default. Team workspaces are reserved for the hosted product.
+            Each workspace is its own container for ideas, projects, tasks, and notes. Personal workspaces are private by default. Team workspaces are shared with people you invite.
           </p>
           <label className="settings-field">
             <span>Name</span>
@@ -3843,10 +4074,10 @@ function CreateWorkspaceModal({ allowTeamWorkspaces, onCreate, onClose }: {
             <span>Type</span>
             <div className="segmented-control" role="group" aria-label="Workspace type">
               <button type="button" className={type === 'personal' ? 'active' : ''} onClick={() => setType('personal')} disabled={isBusy}>Personal</button>
-              <button type="button" className={type === 'team' ? 'active' : ''} onClick={() => setType('team')} disabled={isBusy || !allowTeamWorkspaces} title={allowTeamWorkspaces ? 'Create a shared workspace' : 'Teams are reserved for the hosted OpenNapse plan.'}>Team</button>
+              <button type="button" className={type === 'team' ? 'active' : ''} onClick={() => setType('team')} disabled={isBusy || !allowTeamWorkspaces} title={allowTeamWorkspaces ? 'Create a shared workspace' : 'Sign in to a cloud backend to create team workspaces.'}>Team</button>
             </div>
           </div>
-          {!allowTeamWorkspaces ? <p className="settings-muted">Team workspaces require the hosted OpenNapse plan. Sign in with Supabase configured to unlock them.</p> : null}
+          {!allowTeamWorkspaces ? <p className="settings-muted">Team workspaces are available once you sign in to a connected cloud backend.</p> : null}
           <div className="settings-actions">
             <button type="submit" className="btn btn-primary" disabled={isBusy || trimmed.length === 0}>
               {isBusy ? 'Creating…' : 'Create workspace'}

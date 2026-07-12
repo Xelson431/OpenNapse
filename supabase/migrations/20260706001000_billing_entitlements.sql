@@ -53,10 +53,12 @@ create policy "workspace admins read subscriptions"
 -- No browser insert/update/delete policies. Private billing wrapper writes with
 -- service role after verifying Stripe webhooks and caller JWTs.
 
+-- Self-hosted deployments seed only the neutral local-first plan. Any paid
+-- plans (and their features/limits) are seeded by the private hosted repo, so
+-- the public MIT repo never ships the commercial plan catalog.
 insert into public.billing_plans (id, name, description, price_label, features, is_public)
 values
-  ('free', 'Free', 'Local-first OpenNapse with optional self-hosted cloud.', null, '{"cloud_sync": true, "team_workspaces": false}'::jsonb, true),
-  ('pro', 'Pro', 'Hosted OpenNapse plan. Pricing is supplied by the private billing wrapper.', null, '{"cloud_sync": true, "team_workspaces": true, "higher_ai_limits": true}'::jsonb, true)
+  ('free', 'OpenNapse', 'Local-first OpenNapse with optional self-hosted cloud.', null, '{"cloud_sync": true, "team_workspaces": true}'::jsonb, true)
 on conflict (id) do update set
   name = excluded.name,
   description = excluded.description,

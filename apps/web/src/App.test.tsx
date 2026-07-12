@@ -428,7 +428,8 @@ describe('App shell', () => {
     expect(screen.queryByRole('button', { name: /sign out/i })).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /^data$/i }))
-    expect(screen.getByRole('heading', { name: /Workspace/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /^Workspace$/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /Manage workspaces/i })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /^ai$/i }))
     expect(screen.getByRole('heading', { name: /Credits and usage/i })).toBeInTheDocument()

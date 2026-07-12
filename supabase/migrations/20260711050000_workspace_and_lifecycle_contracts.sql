@@ -27,11 +27,11 @@ begin
    where ws.workspace_id = target_workspace_id;
   return query select
     coalesce(resolved_plan, 'free')::text,
-    case when resolved_plan = 'pro' then 20 else 1 end,
-    case when resolved_plan = 'pro' then 100 else 1 end,
-    case when resolved_plan = 'pro' then 100 else 10 end,
-    case when resolved_plan = 'pro' then 100 else 5 end,
-    case when sub_status = 'past_due' then sub_period_end + interval '7 days' else null end;
+    1,
+    1,
+    10,
+    5,
+    null::timestamptz;
 end;
 $$;
 
