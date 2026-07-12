@@ -62,6 +62,33 @@ Deno.serve(async (request) => {
     return json(403, { error: 'Only workspace owners/admins can invite.' })
   }
 
+  // Do not invite someone who is already an active member.
+  const { data: existingMember } = await caller
+    .from('workspace_members')
+    .select('user_id, profiles:profiles!inner(email)')
+    .eq('workspace_id', body.workspaceId)
+    .eq('status', 'active')
+    .eq('profiles.email', emailNormalized)
+    .maybeSingle()
+  if (existingMember) return json(409, { error: 'That person is already a member of this workspace.' })
+
+  // Reuse an existing live invite instead of creating a duplicate.
+  const { data: pendingInvite } = await caller
+    .from('workspace_invites')
+    .select('id, email, role, expires_at, token, status')
+    .eq('workspace_id', body.workspaceId)
+    .eq('status', 'pending')
+    .eq('email', emailNormalized)
+    .maybeSingle()
+  if (pendingInvite) {
+    return json(200, {
+      ok: true,
+      invite: { id: pendingInvite.id, email: pendingInvite.email, role: pendingInvite.role, expiresAt: pendingInvite.expires_at },
+      token: pendingInvite.token,
+      reused: true,
+    })
+  }
+
   const { data: limitRows, error: limitError } = await caller.rpc('entitlement_limits', {
     target_workspace_id: body.workspaceId,
   })
