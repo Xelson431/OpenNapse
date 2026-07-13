@@ -13,7 +13,21 @@ access.
 > OpenNapse is local-first. This server talks to the **Supabase cloud
 > backend**, so you need Supabase configured and a signed-in account.
 
-## Run with npx
+## Build from source
+
+This package is set up to publish to npm as `opennapse-mcp`, but it is **not
+published yet**. Until it is, build it from the [OpenNapse monorepo](https://github.com/Xelson431/OpenNapse):
+
+```bash
+pnpm install
+pnpm --filter opennapse-mcp build
+```
+
+Then point your agent at `apps/mcp/dist/index.js`.
+
+## Run with npx (once published)
+
+Once published, you'll be able to run it without cloning or building:
 
 ```bash
 OPENNAPSE_SUPABASE_URL="https://YOUR_REF.supabase.co" \
@@ -25,14 +39,14 @@ npx opennapse-mcp
 ## Agent config
 
 Most desktop AI tools (Claude Desktop, Cursor, Cline, opencode, …) accept an
-MCP server defined by a launch command:
+MCP server defined by a launch command. Using a local build (works today):
 
 ```json
 {
   "mcpServers": {
     "opennapse": {
-      "command": "npx",
-      "args": ["-y", "opennapse-mcp"],
+      "command": "node",
+      "args": ["/absolute/path/to/OpenNapse/apps/mcp/dist/index.js"],
       "env": {
         "OPENNAPSE_SUPABASE_URL": "https://YOUR_REF.supabase.co",
         "OPENNAPSE_SUPABASE_ANON_KEY": "your-anon-key",
@@ -42,6 +56,8 @@ MCP server defined by a launch command:
   }
 }
 ```
+
+Once published, swap the command for `"npx"` with `"args": ["-y", "opennapse-mcp"]`.
 
 ## Environment variables
 
