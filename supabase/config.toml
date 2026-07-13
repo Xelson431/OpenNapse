@@ -6,6 +6,10 @@ port = 54321
 schemas = ["public", "graphql_public"]
 extra_search_path = ["public", "extensions"]
 max_rows = 1000
+# Match the deployed instance: migration-created tables are reachable by the
+# Data API roles (anon/authenticated/service_role) through RLS. Without this,
+# the local CLI's new default denies table access and the RLS suite cannot run.
+auto_expose_new_tables = true
 
 [db]
 port = 54322
