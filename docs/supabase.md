@@ -86,6 +86,41 @@ Migrations, applied in order:
 - `daily_credit_balances` — the 10/day free-credit ledger.
 - `audit_logs` — read-only from the client.
 
+### 6. Hosted platform contracts (additive)
+`20260711*` — a series of additive migrations adding: logical identity for
+merge/sync, merge/sync tables, atomic credit consumption, the deletion
+lifecycle (`deletion_requests`), transactional `create_workspace`, owner
+invariants + `transfer_workspace_ownership`, membership contracts
+(`remove_workspace_member`, `accept_workspace_invite`), and the managed-AI
+ledger. See [PLAN.md](../PLAN.md) for the full catalog and rollout discipline.
+
+### 7. Entitlement & membership hardening (additive)
+`20260712000000_entitlement_and_membership_hardening.sql`
+
+- `entitlement_limits()` is plan-agnostic in the public repo (generous
+  self-host defaults, no paid tiers) and requires active membership to read a
+  workspace's entitlements. The **private** billing repo overrides this
+  function to enforce paid tiers.
+- Drops the over-broad direct `UPDATE` policy on `workspace_members`; role/status
+  changes must go through the security-definer RPCs (which enforce hierarchy,
+  owner safety, and audit logging).
+- `accept_workspace_invite()` is idempotent for existing members and no longer
+  false-fails on seat limits for someone who already holds a seat.
+
+### 8. Workspace lifecycle & invite integrity (additive)
+`20260712020000_workspace_lifecycle_and_invite_integrity.sql`
+
+- `create_workspace()` is truly idempotent via `workspace_create_requests`.
+- `transfer_workspace_ownership()` is blocked while a workspace deletion is pending.
+- A partial unique index prevents duplicate pending invites per `(workspace, email)`.
+
+### 9. Idea descriptions & resources (additive)
+`20260713000000_idea_descriptions_and_resources.sql`
+
+- Adds `ideas.description` (long-form markdown, distinct from the short `body`).
+- Adds `idea_resources` — markdown docs / links attached to an idea, workspace-scoped and RLS-gated (member-read / editor-write), kept in the same workspace as their idea by a trigger.
+- Consumed by the [MCP server](./mcp.md) so agents can read and improve idea descriptions and resources.
+
 **RLS is the security boundary.** Personal data is private by default; team data is gated by membership. Before any sync ships, cross-user access tests must prove user A cannot read user B's rows (see [Security](./security.md)).
 
 ## Edge Functions (`supabase/functions/`)
@@ -110,12 +145,19 @@ Secret-bearing and privileged actions run server-side, never in the browser. All
 | `ensure-personal-workspace.ts` | Upserts profile, finds/creates a personal workspace + owner membership. |
 | `use-personal-workspace-bootstrap.ts` | Runs bootstrap once per signed-in user (idle → bootstrapping → ready/failed). |
 | `bootstrap.ts` | `createPersonalWorkspaceBootstrapPlan()` — a **pure** plan (rows to create), easy to test. |
-| `teams.ts` | List members/invites; invite/accept via Edge Functions; revoke/remove via direct table updates. |
+| `teams.ts` | List members/invites; invite/accept via Edge Functions; revoke, remove, and transfer-ownership via security-definer RPCs (`remove_workspace_member`, `transfer_workspace_ownership`). |
+| `lifecycle.ts` | Workspace/account deletion requests + cancellation + ownership transfer via RPCs. |
 | `credits.ts` | `getTodayBalance()`, `listRecentUsage()` — read the ledger tables. |
 | `audit.ts` | `listAuditLog()` — read-only. |
 
-**Real today:** magic-link sign-in, session detection, personal-workspace bootstrap.
-**Gated / preview:** team invites and team workspace mode (`ENABLE_TEAM_WORKSPACES = false` in `App.tsx`, team workspaces hidden from switcher, team creation blocked); credits/audit reads depend on the tables + service-role writes existing.
+**Real today:** magic-link sign-in, session detection, personal-workspace bootstrap, team invites/roles/removal/ownership transfer, workspace management (rename/delete), and the delayed cancelable deletion lifecycle. Team workspaces are enabled when `VITE_ENABLE_TEAM_WORKSPACES=true` with Supabase configured and signed in.
+**Gated / preview:** cross-device conflict-resolving sync, and Stripe checkout/webhook (kept behind env flags in the private billing wrapper).
+
+## Agent access (MCP)
+
+The optional [MCP server](./mcp.md) (`apps/mcp`) authenticates as the signed-in
+user and exposes ideas, tasks, projects, and idea resources to AI agents
+through RLS. It never uses the service-role key. See [docs/mcp.md](./mcp.md).
 
 ## What's NOT enabled
 

@@ -1,13 +1,14 @@
 import { create } from 'zustand'
 import { getDb } from '../db/get-db'
 import { assertWriteAllowed } from '../lib/rate-limiter'
-import type { Idea } from '../domain/ideas'
+import type { Idea, UpdateIdeaInput } from '../domain/ideas'
 
 interface IdeasState {
   ideas: Idea[]
   isLoaded: boolean
   loadIdeas: () => Promise<void>
   createIdea: (input: { title: string; projectId?: string | null }) => Promise<void>
+  updateIdea: (id: string, input: UpdateIdeaInput) => Promise<Idea>
   buryIdea: (id: string) => Promise<void>
   resurrectIdea: (id: string) => Promise<void>
   moveIdeaToProject: (id: string, projectId: string) => Promise<void>
@@ -25,6 +26,12 @@ export const useIdeasStore = create<IdeasState>((set, get) => ({
     assertWriteAllowed('createIdea')
     const idea = await getDb().createIdea({ title: input.title, projectId: input.projectId ?? null })
     set({ ideas: [idea, ...get().ideas] })
+  },
+  updateIdea: async (id, input) => {
+    assertWriteAllowed('updateIdea')
+    const updated = await getDb().updateIdea(id, input)
+    set({ ideas: get().ideas.map((idea) => (idea.id === id ? updated : idea)) })
+    return updated
   },
   buryIdea: async (id) => {
     assertWriteAllowed('buryIdea')

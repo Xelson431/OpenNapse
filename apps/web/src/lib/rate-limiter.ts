@@ -1,8 +1,12 @@
 export type WriteOperation =
   | 'createIdea'
+  | 'updateIdea'
   | 'buryIdea'
   | 'resurrectIdea'
   | 'moveIdeaToProject'
+  | 'createIdeaResource'
+  | 'updateIdeaResource'
+  | 'deleteIdeaResource'
   | 'createProject'
   | 'promoteIdea'
   | 'createTask'
@@ -33,9 +37,13 @@ export class RateLimitError extends Error {
 
 const LIMITS: Record<WriteOperation, RateLimitConfig> = {
   createIdea: { maxRequests: 30, windowMs: 60_000 },
+  updateIdea: { maxRequests: 120, windowMs: 60_000 },
   buryIdea: { maxRequests: 60, windowMs: 60_000 },
   resurrectIdea: { maxRequests: 60, windowMs: 60_000 },
   moveIdeaToProject: { maxRequests: 60, windowMs: 60_000 },
+  createIdeaResource: { maxRequests: 60, windowMs: 60_000 },
+  updateIdeaResource: { maxRequests: 120, windowMs: 60_000 },
+  deleteIdeaResource: { maxRequests: 60, windowMs: 60_000 },
   createProject: { maxRequests: 20, windowMs: 60_000 },
   promoteIdea: { maxRequests: 20, windowMs: 60_000 },
   createTask: { maxRequests: 30, windowMs: 60_000 },
