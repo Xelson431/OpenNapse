@@ -45,6 +45,10 @@ export function useEntitlements(workspaceId: string | undefined, authStatus: Aut
   const [entitlements, setEntitlements] = useState<Entitlements>(IDLE)
 
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
+    // Resetting to IDLE synchronously on sign-out / missing client is
+    // intentional: never render stale (e.g. Pro) entitlements after the session
+    // that granted them is gone.
     if (authStatus.mode !== 'signed-in' || !workspaceId) {
       setEntitlements(IDLE)
       return
@@ -54,6 +58,7 @@ export function useEntitlements(workspaceId: string | undefined, authStatus: Aut
       setEntitlements(IDLE)
       return
     }
+    /* eslint-enable react-hooks/set-state-in-effect */
     let active = true
     setEntitlements((current) => ({ ...current, loading: true }))
     void client

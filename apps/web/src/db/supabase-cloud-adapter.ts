@@ -734,6 +734,9 @@ export class SupabaseCloudAdapter implements DBAdapter {
     }
     if (input.scheduledDate !== undefined) patch.scheduled_date = input.scheduledDate
     if (input.dueDate !== undefined) patch.due_date = input.dueDate
+    // updated_by is derived server-side from the authenticated identity; never
+    // trust a client-supplied editor. assignee_id is a real field the user sets.
+    if (input.assigneeId !== undefined) patch.assignee_id = input.assigneeId
     const { data, error } = await client
       .from('tasks')
       .update(patch)
@@ -763,7 +766,13 @@ export class SupabaseCloudAdapter implements DBAdapter {
 
   async deleteNote(id: string): Promise<void> {
     const client = this.requireClient('deleteNote')
-    const { error } = await client.from('notes').update({ is_deleted: true }).eq('id', id)
+    // Scope to the active workspace so a note ID from another workspace the
+    // user also belongs to cannot be soft-deleted out from under them.
+    const { error } = await client
+      .from('notes')
+      .update({ is_deleted: true })
+      .eq('id', id)
+      .eq('workspace_id', this.requireWorkspace())
     if (error) {
       logger.error('cloud', 'deleteNote failed', { error: error.message, id })
       throw new Error(`deleteNote: ${error.message}`)
@@ -841,16 +850,20 @@ export class SupabaseCloudAdapter implements DBAdapter {
   async clearAllData(): Promise<void> {
     const client = this.requireClient('clearAllData')
     const workspaceId = this.requireWorkspace()
-    const results = await Promise.allSettled([
+    // Supabase resolves (does not reject) on query errors, so allSettled alone
+    // would report success on a failed delete. Inspect each result's error and
+    // surface a failure instead of silently claiming the workspace was cleared.
+    const results = await Promise.all([
       client.from('ideas').delete().eq('workspace_id', workspaceId),
       client.from('projects').delete().eq('workspace_id', workspaceId),
       client.from('tasks').delete().eq('workspace_id', workspaceId),
       client.from('notes').delete().eq('workspace_id', workspaceId),
     ])
-    for (const result of results) {
-      if (result.status === 'rejected') {
-        logger.error('cloud', 'clearAllData delete failed', { reason: result.reason })
-      }
+    const failures = results.filter((result) => result.error)
+    if (failures.length > 0) {
+      const message = failures.map((result) => result.error?.message ?? 'unknown error').join('; ')
+      logger.error('cloud', 'clearAllData delete failed', { error: message })
+      throw new Error(`clearAllData: ${message}`)
     }
   }
 

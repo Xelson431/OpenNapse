@@ -31,11 +31,13 @@ import { IDEA_DRAG_MIME, hasIdeaDragPayload, readIdeaDragPayload } from './lib/d
 import { useSyncStatus, type CloudConnectionStatus } from './sync/use-sync'
 import { useIdeasStore } from './stores/use-ideas-store'
 import { toPromoteInput, useWorkspaceStore } from './stores/use-workspace-store'
-import { useWorkspacesStore } from './stores/use-workspaces-store'
-import { setDb, getDb } from './db/get-db'
+import { cloudWorkspacePreferenceScope, useWorkspacesStore, type WorkspacePreferenceScope } from './stores/use-workspaces-store'
+import { assertDbSnapshotCurrent, beginDbTransition, cancelDbTransition, captureDbSnapshot, commitDbTransition, getDb, isDbSnapshotCurrent } from './db/get-db'
+import type { DBAdapter } from './db/adapter'
 import { createSupabaseCloudAdapter } from './db/supabase-cloud-adapter'
 import { BrowserLocalAdapter } from './db/browser-local-adapter'
 import { buildCodeBlockHtml, prepareNoteContent, sanitizeNoteHref, sanitizeNoteHtml } from './lib/note-html'
+import { assertWriteAllowed } from './lib/rate-limiter'
 
 type ViewId = 'capture' | 'dashboard' | 'kanban' | 'notes' | 'graph' | 'focus' | 'stats' | 'logs'
 type ThemeMode = 'light' | 'dark'
@@ -153,8 +155,8 @@ function App() {
   const [sessionKeys, setSessionKeys] = useState<Record<string, string>>({})
   const [acceptedPreviewHash, setAcceptedPreviewHash] = useState<string | undefined>()
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null)
-  const { ideas, isLoaded, loadIdeas, createIdea, updateIdea, buryIdea, resurrectIdea, moveIdeaToProject, clearAllData: clearIdeas } = useIdeasStore()
-  const { projects, tasks, notes, loadWorkspace, createProject, promoteIdea, createTask, moveTask, updateTask, upsertNote, deleteNote, exportData, importData, clearAllData: clearWorkspace } = useWorkspaceStore()
+  const { ideas, isLoaded, loadIdeas, resetIdeas, createIdea, updateIdea, buryIdea, resurrectIdea, moveIdeaToProject } = useIdeasStore()
+  const { projects, tasks, notes, loadWorkspace, resetWorkspace, createProject, promoteIdea, createTask, moveTask, updateTask, upsertNote, deleteNote, exportData, importData, clearAllData: clearWorkspace } = useWorkspaceStore()
   const supabaseEnv = useMemo(() => getSupabaseEnv(), [])
   const authStatus = useAuthStatus()
   const workspaceBootstrap = usePersonalWorkspaceBootstrap(authStatus)
@@ -195,41 +197,91 @@ function App() {
   const sidebarRef = useRef<HTMLElement | null>(null)
   const sidebarToggleRef = useRef<HTMLButtonElement | null>(null)
   const previousSidebarCollapsedRef = useRef<boolean>(sidebarCollapsed)
+  const adapterTransitionRef = useRef(0)
+  const contentLoadRef = useRef(0)
+  const [initialAdapter] = useState<DBAdapter>(() => getDb())
+  const activeAdapterRef = useRef<DBAdapter>(initialAdapter)
+  const activeScopeRef = useRef<WorkspacePreferenceScope>('local')
+  const activeWorkspaceRef = useRef(activeWorkspaceId)
+  const cloudReadyRef = useRef(false)
 
-  useEffect(() => {
-    void loadWorkspaces()
-  }, [loadWorkspaces])
+  const refreshContent = useCallback(async () => {
+    const snapshot = captureDbSnapshot()
+    const workspaceId = activeWorkspaceRef.current
+    const contentGeneration = ++contentLoadRef.current
+    const isCurrent = () => isDbSnapshotCurrent(snapshot) && activeWorkspaceRef.current === workspaceId && contentLoadRef.current === contentGeneration
+    resetIdeas()
+    resetWorkspace()
+    await Promise.all([loadIdeas(snapshot.adapter, isCurrent), loadWorkspace(snapshot.adapter, isCurrent)])
+  }, [loadIdeas, loadWorkspace, resetIdeas, resetWorkspace])
 
-  useEffect(() => {
-    // activeWorkspaceId is reactive; reload content whenever the user swaps workspaces.
-    void loadIdeas()
-    void loadWorkspace()
-  }, [activeWorkspaceId, loadIdeas, loadWorkspace])
+  const selectWorkspace = useCallback((workspaceId: string) => {
+    const snapshot = captureDbSnapshot()
+    const adapter = snapshot.adapter
+    const scope = activeScopeRef.current
+    setActiveWorkspace(workspaceId, { adapter, scope })
+    activeWorkspaceRef.current = workspaceId
+    void refreshContent()
+  }, [refreshContent, setActiveWorkspace])
 
   useEffect(() => {
     if (teamWorkspacesEnabled || entitlements.loading) return
     if (activeWorkspaceRecord?.type !== 'team') return
-    setActiveWorkspace(LOCAL_PERSONAL_WORKSPACE_ID)
-  }, [teamWorkspacesEnabled, entitlements.loading, activeWorkspaceRecord, setActiveWorkspace])
+    selectWorkspace(LOCAL_PERSONAL_WORKSPACE_ID)
+  }, [teamWorkspacesEnabled, entitlements.loading, activeWorkspaceRecord, selectWorkspace])
 
   useEffect(() => {
     logger.info('adapter', `Auth status: ${authStatus.mode}, Bootstrap: ${workspaceBootstrap.mode}`)
+    const transition = beginDbTransition()
+    adapterTransitionRef.current = transition
+    const invalidateContent = () => {
+      contentLoadRef.current += 1
+      resetIdeas()
+      resetWorkspace()
+    }
+    const isCurrent = () => adapterTransitionRef.current === transition
+    invalidateContent()
     void (async () => {
-      if (authStatus.mode === 'signed-in' && authStatus.userId && workspaceBootstrap?.mode === 'ready' && workspaceBootstrap.workspaceId) {
+      // Auth is deliberately a hard gate: do not even inspect local/cloud data
+      // until the auth transition has settled.
+      if (authStatus.mode === 'loading') return
+      if (authStatus.mode === 'signed-in') {
+        if (workspaceBootstrap.mode === 'bootstrapping') return
+        if (!authStatus.userId || workspaceBootstrap.mode !== 'ready' || !workspaceBootstrap.workspaceId) {
+          cancelDbTransition(transition)
+          if (workspaceBootstrap.mode === 'failed') {
+            setCloudConnection({ mode: 'failed', description: workspaceBootstrap.description })
+          }
+          return
+        }
         logger.info('adapter', 'Switching to SupabaseCloudAdapter', { workspaceId: workspaceBootstrap.workspaceId })
         setCloudConnection({ mode: 'connecting', description: 'Connecting cloud workspace…' })
+        cloudReadyRef.current = false
         try {
           const cloudAdapter = createSupabaseCloudAdapter()
-          cloudAdapter.setActiveWorkspaceId(workspaceBootstrap.workspaceId)
-          setDb(cloudAdapter)
-          setActiveWorkspace(workspaceBootstrap.workspaceId)
-          await loadWorkspaces()
-          await loadIdeas()
-          await loadWorkspace()
+          const scope = cloudWorkspacePreferenceScope(supabaseEnv.projectHost ?? 'unknown', authStatus.userId)
+          const active = await loadWorkspaces({
+            adapter: cloudAdapter,
+            scope,
+            fallbackWorkspaceId: workspaceBootstrap.workspaceId,
+            shouldCommit: isCurrent,
+            onBeforeCommit: () => {
+              if (!commitDbTransition(cloudAdapter, transition)) return false
+              activeAdapterRef.current = cloudAdapter
+              activeScopeRef.current = scope
+            },
+          })
+          if (!isCurrent() || !active) return
+          activeWorkspaceRef.current = active
+          await refreshContent()
+          if (!isCurrent() || !isDbSnapshotCurrent(captureDbSnapshot())) return
+          cloudReadyRef.current = true
           setCloudConnection({ mode: 'ready', description: 'Cloud workspace connected.' })
         } catch (err) {
+          if (!isCurrent()) return
           const message = err instanceof Error ? err.message : String(err)
           logger.error('adapter', 'Cloud adapter setup failed', { error: message })
+          cancelDbTransition(transition)
           setCloudConnection({ mode: 'failed', description: message })
         }
         return
@@ -237,13 +289,26 @@ function App() {
       if (authStatus.mode === 'signed-out' || authStatus.mode === 'unavailable') {
         logger.info('adapter', 'Switching to BrowserLocalAdapter', { mode: authStatus.mode })
         setCloudConnection({ mode: 'idle', description: 'Using local-only storage.' })
-        setDb(new BrowserLocalAdapter())
-        await loadWorkspaces()
-        await loadIdeas()
-        await loadWorkspace()
+        cloudReadyRef.current = false
+        const localAdapter = new BrowserLocalAdapter()
+        const active = await loadWorkspaces({
+          adapter: localAdapter,
+          scope: 'local',
+          fallbackWorkspaceId: LOCAL_PERSONAL_WORKSPACE_ID,
+          shouldCommit: isCurrent,
+          onBeforeCommit: () => {
+            if (!commitDbTransition(localAdapter, transition)) return false
+            activeAdapterRef.current = localAdapter
+            activeScopeRef.current = 'local'
+          },
+        })
+        if (!isCurrent() || !active) return
+        activeWorkspaceRef.current = active
+        await refreshContent()
       }
     })()
-  }, [authStatus.mode, authStatus.userId, workspaceBootstrap, loadIdeas, loadWorkspace, loadWorkspaces, setActiveWorkspace])
+    return () => cancelDbTransition(transition)
+  }, [authStatus.mode, authStatus.userId, workspaceBootstrap.mode, workspaceBootstrap.workspaceId, supabaseEnv.projectHost, loadWorkspaces, resetIdeas, resetWorkspace, refreshContent])
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -349,16 +414,22 @@ function App() {
   }, [sidebarCollapsed])
 
   useEffect(() => {
-    if (authStatus.mode !== 'signed-in') return
+    if (authStatus.mode !== 'signed-in' || workspaceBootstrap.mode !== 'ready' || !cloudReadyRef.current) return
     if (typeof window === 'undefined') return
     const params = new URLSearchParams(window.location.search)
     const token = params.get('invite')
     if (!token) return
     void (async () => {
+      const adapter = activeAdapterRef.current
+      const scope = activeScopeRef.current
+      const transition = adapterTransitionRef.current
       const result = await acceptInvite(token)
       if (result.ok) {
-        await loadWorkspaces()
-        setActiveWorkspace(result.data.workspaceId)
+        const isCurrent = () => adapterTransitionRef.current === transition && activeAdapterRef.current === adapter && activeScopeRef.current === scope && cloudReadyRef.current
+        if (isCurrent()) {
+          await loadWorkspaces({ adapter, scope, shouldCommit: isCurrent })
+          if (isCurrent()) selectWorkspace(result.data.workspaceId)
+        }
       } else {
         logger.warn('teams', 'Invite acceptance failed', { error: result.error })
       }
@@ -366,7 +437,7 @@ function App() {
       const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}${window.location.hash}`
       window.history.replaceState(null, '', next)
     })()
-  }, [authStatus.mode, loadWorkspaces, setActiveWorkspace])
+  }, [authStatus.mode, workspaceBootstrap.mode, cloudConnection.mode, loadWorkspaces, selectWorkspace])
 
   const buriedIdeas = useMemo(() => ideas.filter((idea) => idea.status === 'buried'), [ideas])
   const activeIdeas = useMemo(() => ideas.filter((idea) => idea.status !== 'buried'), [ideas])
@@ -509,7 +580,7 @@ function App() {
                     event.target.value = activeWorkspaceId
                     return
                   }
-                  setActiveWorkspace(value)
+                  selectWorkspace(value)
                 }}
               >
                 {visibleWorkspaces.map((workspace) => (
@@ -636,7 +707,7 @@ function App() {
             <FocusView ideas={activeIdeas} tasks={tasks} selectedProjectId={selectedProjectId} onMoveTask={moveTask} />
           )}
           {activeView === 'stats' && (
-            <StatsView ideas={ideas} projects={projects} tasks={tasks} notes={notes} exportData={exportData} importData={importData} allowDestructiveImport={authStatus.mode !== 'signed-in'} reload={async () => { await loadIdeas(); await loadWorkspace() }} onLoadDemoData={async () => { await importData(JSON.stringify(dummyData)); await loadIdeas(); await loadWorkspace() }} onClearAllData={async () => { await clearIdeas(); await clearWorkspace(); await loadIdeas(); await loadWorkspace() }} />
+            <StatsView ideas={ideas} projects={projects} tasks={tasks} notes={notes} exportData={exportData} importData={importData} allowDestructiveImport={authStatus.mode !== 'signed-in'} reload={refreshContent} onLoadDemoData={async () => { await importData(JSON.stringify(dummyData)); await refreshContent() }} onClearAllData={async () => { await clearWorkspace(); await refreshContent() }} />
           )}
           {activeView === 'logs' && <LogViewer />}
           {SHOW_LOCAL_AI_SUGGESTIONS ? <AISuggestions ideas={ideas} projects={projects} tasks={tasks} /> : null}
@@ -703,7 +774,7 @@ function App() {
           onClose={() => setPromotingIdea(null)}
           onSubmit={async ({ whyNow, firstStep, doneLooksLike }) => {
             await promoteIdea(toPromoteInput(promotingIdea, whyNow, firstStep, doneLooksLike))
-            await loadIdeas()
+            await refreshContent()
             setPromotingIdea(null)
             setActiveView('dashboard')
           }}
@@ -764,12 +835,12 @@ function App() {
           onAcceptPreview={(hash) => { setAcceptedPreviewHash(hash); setSettingsSavedAt(new Date().toISOString()) }}
           settingsSavedAt={settingsSavedAt}
           allowClearData={authStatus.mode !== 'signed-in'}
-          onClearData={async () => { await clearIdeas(); await clearWorkspace(); await loadIdeas(); await loadWorkspace() }}
+          onClearData={async () => { await clearWorkspace(); await refreshContent() }}
           workspaces={visibleWorkspaces}
           activeWorkspaceId={activeWorkspaceId}
-          onSelectWorkspace={setActiveWorkspace}
+          onSelectWorkspace={selectWorkspace}
           onRenameWorkspace={async (id, name) => { await renameWorkspaceRecord(id, name) }}
-          onDeleteWorkspace={async (id) => { await deleteWorkspaceRecord(id); await loadIdeas(); await loadWorkspace() }}
+          onDeleteWorkspace={async (id) => { await deleteWorkspaceRecord(id, { adapter: activeAdapterRef.current, scope: activeScopeRef.current }); if (id === activeWorkspaceRef.current) activeWorkspaceRef.current = useWorkspacesStore.getState().activeWorkspaceId; await refreshContent() }}
           onClose={() => setIsSettingsOpen(false)}
         />
       )}
@@ -786,7 +857,7 @@ function App() {
           allowTeamWorkspaces={teamWorkspacesEnabled && supabaseEnv.configured && authStatus.mode === 'signed-in'}
           onCreate={async (name, type) => {
             const record = await createWorkspaceRecord({ name, type })
-            setActiveWorkspace(record.id)
+            selectWorkspace(record.id)
           }}
           onClose={() => setIsCreateWorkspaceOpen(false)}
         />
@@ -2098,24 +2169,23 @@ function FocusView({ ideas, tasks, selectedProjectId, onMoveTask }: { ideas: Ide
   const focusableIdeas = ideas.filter((idea) => idea.status !== 'done' && idea.status !== 'buried').slice(0, 8)
   const [linkedTarget, setLinkedTarget] = useState('')
 
-  const restored = useRef<PomodoroPersisted | null>(readPomodoroState())
-  const [mode, setMode] = useState<PomodoroMode>(restored.current?.mode ?? 'work')
-  const [durationMinutes, setDurationMinutes] = useState(restored.current?.durationMinutes ?? 25)
+  // Read the persisted snapshot exactly once on mount. A lazy state initializer
+  // keeps this out of a ref, so it never reads a ref value during render.
+  const [restored] = useState<PomodoroPersisted | null>(() => readPomodoroState())
+  const [mode, setMode] = useState<PomodoroMode>(restored?.mode ?? 'work')
+  const [durationMinutes, setDurationMinutes] = useState(restored?.durationMinutes ?? 25)
   const [endsAt, setEndsAt] = useState<number | null>(() => {
-    const r = restored.current
-    if (r?.isRunning && r.endsAt && r.endsAt > Date.now()) return r.endsAt
+    if (restored?.isRunning && restored.endsAt && restored.endsAt > Date.now()) return restored.endsAt
     return null
   })
   const [remainingSeconds, setRemainingSeconds] = useState(() => {
-    const r = restored.current
-    if (r?.isRunning && r.endsAt) return Math.max(0, Math.round((r.endsAt - Date.now()) / 1000))
-    return r?.remainingSeconds ?? 25 * 60
+    if (restored?.isRunning && restored.endsAt) return Math.max(0, Math.round((restored.endsAt - Date.now()) / 1000))
+    return restored?.remainingSeconds ?? 25 * 60
   })
   const [isRunning, setIsRunning] = useState(() => {
-    const r = restored.current
-    return Boolean(r?.isRunning && r.endsAt && r.endsAt > Date.now())
+    return Boolean(restored?.isRunning && restored.endsAt && restored.endsAt > Date.now())
   })
-  const [completedSessions, setCompletedSessions] = useState(restored.current?.completedSessions ?? 0)
+  const [completedSessions, setCompletedSessions] = useState(restored?.completedSessions ?? 0)
   const [prompt, setPrompt] = useState<null | { next: PomodoroMode; message: string }>(null)
 
   const targetOptions = useMemo(() => [
@@ -2136,9 +2206,12 @@ function FocusView({ ideas, tasks, selectedProjectId, onMoveTask }: { ideas: Ide
   useEffect(() => {
     if (!isRunning || endsAt === null) return
     const tick = () => {
-      const remaining = Math.max(0, Math.round((endsAt - Date.now()) / 1000))
+      const msRemaining = endsAt - Date.now()
+      // Ceil for display so a phase never shows 0 while time is still left;
+      // completion is gated on real elapsed time, not the rounded value.
+      const remaining = Math.max(0, Math.ceil(msRemaining / 1000))
       setRemainingSeconds(remaining)
-      if (remaining <= 0) {
+      if (msRemaining <= 0) {
         setIsRunning(false)
         setEndsAt(null)
         playPomodoroChime()
@@ -2189,15 +2262,20 @@ function FocusView({ ideas, tasks, selectedProjectId, onMoveTask }: { ideas: Ide
 
   const toggle = () => {
     if (isRunning) {
-      if (endsAt) setRemainingSeconds(Math.max(0, Math.round((endsAt - Date.now()) / 1000)))
+      // Pause: freeze the remaining time and stop the wall-clock countdown.
+      if (endsAt) setRemainingSeconds(Math.max(0, Math.ceil((endsAt - Date.now()) / 1000)))
       setIsRunning(false)
       setEndsAt(null)
-    } else {
-      startPhase(mode, Math.max(1, Math.ceil(remainingSeconds / 60)) === 0 ? durationMinutes : durationMinutes)
-      // resume from the exact remaining, not the full duration
-      setEndsAt(Date.now() + remainingSeconds * 1000)
-      setIsRunning(true)
+      return
     }
+    // Resume only when there is real time left mid-phase; otherwise start a
+    // full phase. Without this guard a completed timer (remainingSeconds === 0)
+    // would set endsAt to now and instantly re-fire completion.
+    const resumeSeconds = remainingSeconds > 0 ? remainingSeconds : durationMinutes * 60
+    setRemainingSeconds(resumeSeconds)
+    setEndsAt(Date.now() + resumeSeconds * 1000)
+    setIsRunning(true)
+    setPrompt(null)
   }
 
   const ringStyle = { ['--focus-progress']: `${elapsedPct}` } as CSSProperties
@@ -3893,8 +3971,9 @@ function IdeaDetailModal({ idea, onClose, onSave }: {
     let active = true
     void (async () => {
       try {
-        const list = await getDb().listIdeaResources(idea.id)
-        if (active) setResources(list)
+        const snapshot = captureDbSnapshot()
+        const list = await snapshot.adapter.listIdeaResources(idea.id)
+        if (active && isDbSnapshotCurrent(snapshot)) setResources(list)
       } catch (err) {
         if (active) { setTone('error'); setMessage(err instanceof Error ? err.message : 'Failed to load resources.') }
       } finally {
@@ -3925,7 +4004,10 @@ function IdeaDetailModal({ idea, onClose, onSave }: {
     if (!trimmed) return
     setResourceBusy(true)
     try {
-      const created = await getDb().createIdeaResource({ ideaId: idea.id, title: trimmed, kind: 'markdown', content: newResourceContent })
+      const snapshot = captureDbSnapshot()
+      assertWriteAllowed('createIdeaResource')
+      const created = await snapshot.adapter.createIdeaResource({ ideaId: idea.id, title: trimmed, kind: 'markdown', content: newResourceContent })
+      assertDbSnapshotCurrent(snapshot)
       setResources((current) => [...current, created])
       setNewResourceTitle('')
       setNewResourceContent('')
@@ -3939,7 +4021,10 @@ function IdeaDetailModal({ idea, onClose, onSave }: {
 
   async function saveResource(id: string, patch: { title?: string; content?: string }) {
     try {
-      const updated = await getDb().updateIdeaResource(id, patch)
+      const snapshot = captureDbSnapshot()
+      assertWriteAllowed('updateIdeaResource')
+      const updated = await snapshot.adapter.updateIdeaResource(id, patch)
+      assertDbSnapshotCurrent(snapshot)
       setResources((current) => current.map((resource) => (resource.id === id ? updated : resource)))
     } catch (err) {
       setTone('error')
@@ -3950,7 +4035,10 @@ function IdeaDetailModal({ idea, onClose, onSave }: {
   async function removeResource(id: string) {
     if (!confirm('Delete this resource?')) return
     try {
-      await getDb().deleteIdeaResource(id)
+      const snapshot = captureDbSnapshot()
+      assertWriteAllowed('deleteIdeaResource')
+      await snapshot.adapter.deleteIdeaResource(id)
+      assertDbSnapshotCurrent(snapshot)
       setResources((current) => current.filter((resource) => resource.id !== id))
     } catch (err) {
       setTone('error')
@@ -4181,6 +4269,8 @@ function TeamSettingsPanel({ activeWorkspace, supabaseEnv, authStatus, teamFeatu
 }) {
   const [members, setMembers] = useState<WorkspaceMember[]>([])
   const [invites, setInvites] = useState<WorkspaceInvite[]>([])
+  // Snapshot "now" once for expiry labels; avoids an impure Date.now() in render.
+  const [nowMs] = useState(() => Date.now())
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<InviteRole>('member')
   const [status, setStatus] = useState('')
@@ -4312,7 +4402,7 @@ function TeamSettingsPanel({ activeWorkspace, supabaseEnv, authStatus, teamFeatu
             {invites.length === 0 ? <small style={{ color: 'var(--muted)' }}>No invites yet.</small> : (
               <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {invites.map((invite) => {
-                  const isExpired = invite.status === 'pending' && new Date(invite.expiresAt).getTime() < Date.now()
+                  const isExpired = invite.status === 'pending' && new Date(invite.expiresAt).getTime() < nowMs
                   const statusLabel = isExpired ? 'expired' : invite.status
                   const statusColor = statusLabel === 'accepted' ? 'var(--accent)' : statusLabel === 'pending' ? 'var(--muted)' : 'var(--danger, #b91c1c)'
                   return (

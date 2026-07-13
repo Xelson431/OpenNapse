@@ -73,6 +73,7 @@ function projectRow(user: TestUser) {
 describeRls('Supabase RLS integration', () => {
   let userA: TestUser | null = null
   let userB: TestUser | null = null
+  const createdTeamIds: string[] = []
 
   beforeAll(async () => {
     userA = await createTestUser('a')
@@ -80,6 +81,9 @@ describeRls('Supabase RLS integration', () => {
   }, 60_000)
 
   afterAll(async () => {
+    if (createdTeamIds.length > 0) {
+      await adminClient().from('teams').delete().in('id', createdTeamIds)
+    }
     await deleteTestUser(userA)
     await deleteTestUser(userB)
   }, 60_000)
@@ -213,5 +217,232 @@ describeRls('Supabase RLS integration', () => {
     expect(replay.data).toEqual(first.data)
     const { count } = await userA!.client.from('sync_changes').select('cursor', { count: 'exact', head: true }).eq('mutation_id', mutationId)
     expect(count).toBe(1)
+  }, 60_000)
+
+  it('scopes workspace idempotency to caller and validated request payload', async () => {
+    const key = crypto.randomUUID()
+    const first = await userA!.client.rpc('create_workspace', {
+      requested_name: 'User A replay workspace',
+      requested_type: 'team',
+      idempotency_key: key,
+    })
+    const replay = await userA!.client.rpc('create_workspace', {
+      requested_name: 'User A replay workspace',
+      requested_type: 'team',
+      idempotency_key: key,
+    })
+    const conflict = await userA!.client.rpc('create_workspace', {
+      requested_name: 'Different replay payload',
+      requested_type: 'team',
+      idempotency_key: key,
+    })
+    const otherUser = await userB!.client.rpc('create_workspace', {
+      requested_name: 'User B independent workspace',
+      requested_type: 'team',
+      idempotency_key: key,
+    })
+
+    expect(first.error).toBeNull()
+    expect(replay.error).toBeNull()
+    expect(replay.data).toEqual([{ workspace_id: first.data![0].workspace_id, created: false }])
+    expect(conflict.error?.message).toMatch(/different workspace request/i)
+    expect(otherUser.error).toBeNull()
+    expect(otherUser.data![0].workspace_id).not.toBe(first.data![0].workspace_id)
+  }, 60_000)
+
+  it('creates one team and workspace atomically and replays safely', async () => {
+    const key = crypto.randomUUID()
+    const first = await userA!.client.rpc('create_team_with_workspace', {
+      requested_team_name: 'Atomic team',
+      requested_workspace_name: 'Atomic workspace',
+      idempotency_key: key,
+    })
+    expect(first.error).toBeNull()
+    const created = first.data![0] as { team_id: string; workspace_id: string; created: boolean }
+    createdTeamIds.push(created.team_id)
+
+    const replay = await userA!.client.rpc('create_team_with_workspace', {
+      requested_team_name: 'Atomic team',
+      requested_workspace_name: 'Atomic workspace',
+      idempotency_key: key,
+    })
+    const conflict = await userA!.client.rpc('create_team_with_workspace', {
+      requested_team_name: 'Conflicting team',
+      requested_workspace_name: 'Atomic workspace',
+      idempotency_key: key,
+    })
+
+    expect(replay.error).toBeNull()
+    expect(replay.data).toEqual([{ ...created, created: false }])
+    expect(conflict.error?.message).toMatch(/different team request/i)
+
+    const admin = adminClient()
+    const { count: ownerCount } = await admin.from('team_members').select('id', { count: 'exact', head: true })
+      .eq('team_id', created.team_id).eq('role', 'owner').eq('status', 'active')
+    const { count: linkCount } = await admin.from('team_workspaces').select('team_id', { count: 'exact', head: true })
+      .eq('team_id', created.team_id).eq('workspace_id', created.workspace_id)
+    expect(ownerCount).toBe(1)
+    expect(linkCount).toBe(1)
+  }, 60_000)
+
+  it('closes direct browser team mutation and invitation writes', async () => {
+    const created = await userA!.client.rpc('create_team_with_workspace', {
+      requested_team_name: 'Closed mutation team',
+      requested_workspace_name: 'Closed mutation workspace',
+      idempotency_key: crypto.randomUUID(),
+    })
+    expect(created.error).toBeNull()
+    const row = created.data![0] as { team_id: string; workspace_id: string }
+    createdTeamIds.push(row.team_id)
+
+    const add = await userA!.client.rpc('add_team_member', {
+      target_team_id: row.team_id,
+      target_user_id: userB!.id,
+      member_role: 'member',
+    })
+    const attach = await userA!.client.rpc('attach_team_to_workspace', {
+      target_team_id: row.team_id,
+      target_workspace_id: userA!.workspaceId,
+    })
+    const directMember = await userA!.client.from('team_members').insert({
+      team_id: row.team_id,
+      user_id: userB!.id,
+      role: 'member',
+      status: 'active',
+    })
+    const directInvite = await userA!.client.from('team_invites').insert({
+      team_id: row.team_id,
+      inviter_user_id: userA!.id,
+      email: userB!.email.toLowerCase(),
+      role: 'member',
+      token_hash: 'a'.repeat(64),
+    })
+
+    expect(add.error).toBeTruthy()
+    expect(attach.error).toBeTruthy()
+    expect(directMember.error).toBeTruthy()
+    expect(directInvite.error).toBeTruthy()
+  }, 60_000)
+
+  it('grants workspace discovery and editing through effective team membership', async () => {
+    const created = await userA!.client.rpc('create_team_with_workspace', {
+      requested_team_name: 'Effective access team',
+      requested_workspace_name: 'Effective access workspace',
+      idempotency_key: crypto.randomUUID(),
+    })
+    expect(created.error).toBeNull()
+    const row = created.data![0] as { team_id: string; workspace_id: string }
+    createdTeamIds.push(row.team_id)
+
+    const admin = adminClient()
+    const { error: memberError } = await admin.from('team_members').insert({
+      team_id: row.team_id,
+      user_id: userB!.id,
+      role: 'member',
+      status: 'active',
+    })
+    expect(memberError).toBeNull()
+
+    const { data: visible, error: visibleError } = await userB!.client.from('workspaces')
+      .select('id').eq('id', row.workspace_id)
+    expect(visibleError).toBeNull()
+    expect(visible).toHaveLength(1)
+
+    const { error: projectError } = await userB!.client.from('projects').insert({
+      workspace_id: row.workspace_id,
+      created_by: userB!.id,
+      title: 'Team member project',
+      description: '',
+      why_now: 'Effective team membership',
+      first_step: 'Create it',
+      done_looks_like: 'Visible to the team',
+      client_id: 'rls-team-test',
+      device_id: 'rls-team-test',
+    })
+    expect(projectError).toBeNull()
+  }, 60_000)
+
+  it('supports team-member assignment and prevents forged task attribution', async () => {
+    const created = await userA!.client.rpc('create_team_with_workspace', {
+      requested_team_name: 'Attribution team',
+      requested_workspace_name: 'Attribution workspace',
+      idempotency_key: crypto.randomUUID(),
+    })
+    expect(created.error).toBeNull()
+    const row = created.data![0] as { team_id: string; workspace_id: string }
+    createdTeamIds.push(row.team_id)
+
+    const admin = adminClient()
+    expect((await admin.from('team_members').insert({
+      team_id: row.team_id,
+      user_id: userB!.id,
+      role: 'member',
+      status: 'active',
+    })).error).toBeNull()
+
+    const { data: project, error: projectError } = await userA!.client.from('projects').insert({
+      workspace_id: row.workspace_id,
+      created_by: userA!.id,
+      title: 'Attribution project',
+      description: '',
+      why_now: 'Verify attribution',
+      first_step: 'Create task',
+      done_looks_like: 'Server controls editor identity',
+      client_id: 'rls-attribution',
+      device_id: 'rls-attribution',
+    }).select('id').single()
+    expect(projectError).toBeNull()
+
+    const { data: task, error: taskError } = await userA!.client.from('tasks').insert({
+      workspace_id: row.workspace_id,
+      created_by: userA!.id,
+      updated_by: userB!.id,
+      assignee_id: userB!.id,
+      project_id: project!.id,
+      title: 'Assigned team task',
+      client_id: 'rls-attribution',
+      device_id: 'rls-attribution',
+    }).select('id, updated_by, assignee_id').single()
+    expect(taskError).toBeNull()
+    expect(task?.updated_by).toBe(userA!.id)
+    expect(task?.assignee_id).toBe(userB!.id)
+
+    const { data: updated, error: updateError } = await userA!.client.from('tasks')
+      .update({ title: 'Updated task', updated_by: userB!.id })
+      .eq('id', task!.id)
+      .select('updated_by')
+      .single()
+    expect(updateError).toBeNull()
+    expect(updated?.updated_by).toBe(userA!.id)
+  }, 60_000)
+
+  it('transfers team ownership atomically and preserves one owner', async () => {
+    const created = await userA!.client.rpc('create_team_with_workspace', {
+      requested_team_name: 'Transfer team',
+      requested_workspace_name: 'Transfer workspace',
+      idempotency_key: crypto.randomUUID(),
+    })
+    expect(created.error).toBeNull()
+    const row = created.data![0] as { team_id: string }
+    createdTeamIds.push(row.team_id)
+    const admin = adminClient()
+    expect((await admin.from('team_members').insert({
+      team_id: row.team_id,
+      user_id: userB!.id,
+      role: 'member',
+      status: 'active',
+    })).error).toBeNull()
+
+    const transfer = await userA!.client.rpc('transfer_team_ownership', {
+      target_team_id: row.team_id,
+      new_owner_user_id: userB!.id,
+    })
+    expect(transfer.error).toBeNull()
+
+    const { data: team } = await admin.from('teams').select('owner_user_id').eq('id', row.team_id).single()
+    const { data: owners } = await admin.from('team_members').select('user_id')
+      .eq('team_id', row.team_id).eq('role', 'owner').eq('status', 'active')
+    expect(team?.owner_user_id).toBe(userB!.id)
+    expect(owners).toEqual([{ user_id: userB!.id }])
   }, 60_000)
 })
