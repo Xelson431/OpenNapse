@@ -13,7 +13,9 @@ create or replace function public.create_workspace(
 returns table (workspace_id uuid, created boolean)
 language plpgsql
 security definer
-set search_path = public
+-- extensions is on the path so pgcrypto's digest() resolves on both Supabase
+-- (pgcrypto in extensions) and bare self-host Postgres (pgcrypto in public).
+set search_path = public, extensions
 as $$
 #variable_conflict error
 declare
