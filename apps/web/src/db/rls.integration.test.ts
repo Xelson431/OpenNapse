@@ -180,9 +180,17 @@ describeRls('Supabase RLS integration', () => {
   }, 60_000)
 
   it('prevents direct owner removal and deletion-state injection', async () => {
-    const { error: ownerRemovalError } = await userA!.client.from('workspace_members')
+    // The hardening migration dropped the browser UPDATE policy on
+    // workspace_members, so a direct owner-removal UPDATE matches no policy and
+    // RLS silently affects zero rows (no thrown error). Assert the owner row is
+    // unchanged rather than expecting an error PostgREST does not raise.
+    await userA!.client.from('workspace_members')
       .update({ status: 'removed' }).eq('workspace_id', userA!.workspaceId).eq('user_id', userA!.id)
-    expect(ownerRemovalError).toBeTruthy()
+    const { data: ownerRow, error: ownerReadError } = await userA!.client.from('workspace_members')
+      .select('status, role').eq('workspace_id', userA!.workspaceId).eq('user_id', userA!.id).single()
+    expect(ownerReadError).toBeNull()
+    expect(ownerRow?.status).toBe('active')
+    expect(ownerRow?.role).toBe('owner')
 
     const { error: injectedDeletionError } = await userA!.client.from('deletion_requests').insert({
       scope: 'workspace', workspace_id: userA!.workspaceId, requested_by: userA!.id,
