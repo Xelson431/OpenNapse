@@ -10,6 +10,7 @@ import { logger, getLogs, clearLogs, serializeLogs, subscribeLogs, type LogEntry
 import { acceptInvite, inviteWorkspaceMember, listWorkspaceInvites, listWorkspaceMembers, revokeWorkspaceInvite, removeWorkspaceMember, type InviteRole, type WorkspaceInvite, type WorkspaceMember } from './auth/teams'
 import { getTodayBalance, listRecentUsage, type DailyCreditBalance, type UsageEvent } from './auth/credits'
 import { createBillingPortalSession, createCheckoutSession, useSubscriptionStatus } from './auth/billing'
+import { useEntitlements } from './auth/entitlements'
 import { listAuditLog, type AuditEntry } from './auth/audit'
 import { cancelDeletion, requestDeletion, listDeletionRequests, transferWorkspaceOwnership } from './auth/lifecycle'
 import { Icon, type IconName } from './components/Icon'
@@ -25,7 +26,7 @@ import { MAX_VOICE_RECORDING_DATA_URL_LENGTH, type Note, type VoiceRecording } f
 import type { Project } from './domain/projects'
 import { calculateStats } from './domain/stats'
 import { taskColumns, type CreateTaskInput, type Task, type TaskColumn, type UpdateTaskInput } from './domain/tasks'
-import { LOCAL_PERSONAL_WORKSPACE_ID, createActiveWorkspace, createActiveWorkspaceFromRecord, workspaceModes, type ActiveWorkspace, type WorkspaceMode, type WorkspaceRecord } from './domain/workspaces'
+import { LOCAL_PERSONAL_WORKSPACE_ID, createActiveWorkspace, createActiveWorkspaceFromRecord, type ActiveWorkspace, type WorkspaceMode, type WorkspaceRecord } from './domain/workspaces'
 import { IDEA_DRAG_MIME, hasIdeaDragPayload, readIdeaDragPayload } from './lib/drag'
 import { useSyncStatus, type CloudConnectionStatus } from './sync/use-sync'
 import { useIdeasStore } from './stores/use-ideas-store'
@@ -161,9 +162,17 @@ function App() {
     () => workspaces.find((w) => w.id === activeWorkspaceId),
     [workspaces, activeWorkspaceId],
   )
+  const entitlementWorkspaceId = workspaceBootstrap.mode === 'ready' && workspaceBootstrap.workspaceId
+    ? workspaceBootstrap.workspaceId
+    : activeWorkspaceId
+  const entitlements = useEntitlements(entitlementWorkspaceId, authStatus)
+  // Teams are available when the server grants the entitlement (hosted Pro, or
+  // self-hosted generous limits), or when the local build flag forces them on.
+  // This is the single source of truth the UI gates team features on.
+  const teamWorkspacesEnabled = ENABLE_TEAM_WORKSPACES || entitlements.teamsAllowed
   const visibleWorkspaces = useMemo(
-    () => (ENABLE_TEAM_WORKSPACES ? workspaces : workspaces.filter((workspace) => workspace.type !== 'team')),
-    [workspaces],
+    () => (teamWorkspacesEnabled ? workspaces : workspaces.filter((workspace) => workspace.type !== 'team')),
+    [workspaces, teamWorkspacesEnabled],
   )
   const activeWorkspace = useMemo<ActiveWorkspace>(
     () => (activeWorkspaceRecord ? createActiveWorkspaceFromRecord(activeWorkspaceRecord) : createActiveWorkspace(workspaceMode)),
@@ -198,10 +207,10 @@ function App() {
   }, [activeWorkspaceId, loadIdeas, loadWorkspace])
 
   useEffect(() => {
-    if (ENABLE_TEAM_WORKSPACES) return
+    if (teamWorkspacesEnabled || entitlements.loading) return
     if (activeWorkspaceRecord?.type !== 'team') return
     setActiveWorkspace(LOCAL_PERSONAL_WORKSPACE_ID)
-  }, [activeWorkspaceRecord, setActiveWorkspace])
+  }, [teamWorkspacesEnabled, entitlements.loading, activeWorkspaceRecord, setActiveWorkspace])
 
   useEffect(() => {
     logger.info('adapter', `Auth status: ${authStatus.mode}, Bootstrap: ${workspaceBootstrap.mode}`)
@@ -340,7 +349,6 @@ function App() {
   }, [sidebarCollapsed])
 
   useEffect(() => {
-    if (!ENABLE_TEAM_WORKSPACES) return
     if (authStatus.mode !== 'signed-in') return
     if (typeof window === 'undefined') return
     const params = new URLSearchParams(window.location.search)
@@ -743,6 +751,8 @@ function App() {
           aiSettings={aiSettings}
           workspaceMode={workspaceMode}
           onWorkspaceModeChange={setWorkspaceMode}
+          teamWorkspacesEnabled={teamWorkspacesEnabled}
+          entitlementPlanId={entitlements.planId}
           onAISettingsChange={updateAISettings}
           sessionKeys={sessionKeys}
           onSessionKeyChange={(providerId, value) => {
@@ -773,7 +783,7 @@ function App() {
       )}
       {isCreateWorkspaceOpen && (
         <CreateWorkspaceModal
-          allowTeamWorkspaces={ENABLE_TEAM_WORKSPACES && supabaseEnv.configured && authStatus.mode === 'signed-in'}
+          allowTeamWorkspaces={teamWorkspacesEnabled && supabaseEnv.configured && authStatus.mode === 'signed-in'}
           onCreate={async (name, type) => {
             const record = await createWorkspaceRecord({ name, type })
             setActiveWorkspace(record.id)
@@ -2938,12 +2948,14 @@ function LogViewer() {
 }
 
 
-function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, onWorkspaceModeChange, supabaseEnv, authStatus, workspaceBootstrap, aiSettings, onAISettingsChange, sessionKeys, onSessionKeyChange, acceptedPreviewHash, onAcceptPreview, settingsSavedAt, allowClearData, onClearData, workspaces, activeWorkspaceId, onSelectWorkspace, onRenameWorkspace, onDeleteWorkspace, onClose }: {
+function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, onWorkspaceModeChange, teamWorkspacesEnabled, entitlementPlanId, supabaseEnv, authStatus, workspaceBootstrap, aiSettings, onAISettingsChange, sessionKeys, onSessionKeyChange, acceptedPreviewHash, onAcceptPreview, settingsSavedAt, allowClearData, onClearData, workspaces, activeWorkspaceId, onSelectWorkspace, onRenameWorkspace, onDeleteWorkspace, onClose }: {
   theme: ThemeMode
   onThemeChange: (theme: ThemeMode) => void
   activeWorkspace: ActiveWorkspace
   workspaceMode: WorkspaceMode
   onWorkspaceModeChange: (mode: WorkspaceMode) => void
+  teamWorkspacesEnabled: boolean
+  entitlementPlanId: string
   supabaseEnv: ResolvedSupabaseEnv
   authStatus: AuthStatus
   workspaceBootstrap: PersonalWorkspaceBootstrapStatus
@@ -3049,7 +3061,7 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
   }, [activeProviderId, activeModelId, activeBaseUrlOverride])
   const billingEnv = useMemo(() => getBillingEnv(), [])
   const isHosted = billingEnv.configured
-  const teamWorkspacesAvailable = ENABLE_TEAM_WORKSPACES && supabaseEnv.configured && authStatus.mode === 'signed-in'
+  const teamWorkspacesAvailable = teamWorkspacesEnabled && supabaseEnv.configured && authStatus.mode === 'signed-in'
   const [settingsTab, setSettingsTab] = useState<'account' | 'ai' | 'data' | 'billing' | 'advanced'>('account')
   const statusToShow = statusMessage
   const canRequestMagicLink = supabaseEnv.configured && authStatus.mode !== 'loading' && authStatus.mode !== 'signed-in' && authEmail.trim().length > 0
@@ -3405,8 +3417,27 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
                 <p className="settings-muted">{teamWorkspacesAvailable ? 'Personal workspaces keep your content separate. Team workspaces let you invite collaborators.' : 'Personal is private by default. Team workspaces become available when you sign in to a cloud backend.'}</p>
                 <div className="segmented-control segmented-control--wide" role="group" aria-label="Workspace mode">
                   <button type="button" className={workspaceMode === 'personal' ? 'active' : ''} onClick={() => onWorkspaceModeChange('personal')}>Personal</button>
-                  <button type="button" disabled title={workspaceModes['team-preview'].description}>Team</button>
+                  <button
+                    type="button"
+                    className={workspaceMode === 'team-preview' ? 'active' : ''}
+                    disabled={!teamWorkspacesAvailable}
+                    title={
+                      teamWorkspacesAvailable
+                        ? 'Team mode is enabled. Create a team workspace from the workspace selector to invite members.'
+                        : authStatus.mode !== 'signed-in'
+                          ? 'Sign in to a cloud account to use team workspaces.'
+                          : 'Team workspaces are a Pro feature. Upgrade your plan to enable them.'
+                    }
+                    onClick={() => onWorkspaceModeChange('team-preview')}
+                  >
+                    Team{isHosted && !teamWorkspacesAvailable ? ' · Pro' : ''}
+                  </button>
                 </div>
+                {teamWorkspacesAvailable ? (
+                  <p className="settings-muted settings-hint">Team mode is enabled{entitlementPlanId && entitlementPlanId !== 'free' ? ` on your ${entitlementPlanId} plan` : ''}. Use <strong>＋ Create workspace</strong> in the toolbar to start a shared team workspace and invite members.</p>
+                ) : isHosted && authStatus.mode === 'signed-in' ? (
+                  <p className="settings-muted settings-hint">Team workspaces are included with Pro. Upgrade from the <strong>Billing</strong> tab to invite collaborators.</p>
+                ) : null}
                 <div className="settings-row"><span>Active workspace</span><strong>{activeWorkspace.name}</strong></div>
                 {!isHosted ? (
                   <div className="settings-row"><span>Workspace ID</span><strong>{activeWorkspace.id}</strong></div>
@@ -3493,7 +3524,7 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
                 activeWorkspace={activeWorkspace}
                 supabaseEnv={supabaseEnv}
                 authStatus={authStatus}
-                teamFeaturesEnabled={ENABLE_TEAM_WORKSPACES}
+                teamFeaturesEnabled={teamWorkspacesEnabled}
               />
             </div>
           )}
@@ -4284,19 +4315,27 @@ function TutorialOverlay({ hasContent }: { hasContent: boolean }) {
   const steps: Array<{ title: string; body: string }> = [
     {
       title: 'Welcome to OpenNapse',
-      body: 'Capture ideas fast, promote the ones that matter into projects, and keep everything organized in one place.',
+      body: 'One loop: capture → promote → plan → ship. Dump raw ideas fast, promote the ones worth pursuing into projects, and plan them on a board — all private and local by default.',
     },
     {
-      title: 'Capture quickly',
-      body: 'Press Space or tap Dump idea to open the brain dump modal. Ideas start as "raw" and you can bury stale ones later.',
+      title: 'Capture without friction',
+      body: 'Press Space (or tap Dump idea) to capture. Ideas start "raw" and cool down over time (hot → cold) so you can see what needs attention. Bury the stale ones; nothing is ever lost.',
     },
     {
-      title: 'Workspaces and teams',
-      body: 'Use the workspace dropdown in the toolbar to switch between containers. You can organize ideas, projects, and notes across different workspaces.',
+      title: 'Add depth to an idea',
+      body: 'Click Details on any idea to add a rich markdown description and attach resource docs — plans, links, research. These are the same fields AI agents can read and improve via the MCP server.',
+    },
+    {
+      title: 'Promote and plan',
+      body: 'Promote an idea into a project with a why-now, first step, and done-looks-like. Projects get a Kanban board you can drive entirely from the keyboard.',
+    },
+    {
+      title: 'Workspaces & teams',
+      body: 'Switch containers from the workspace dropdown, and use ＋ Create workspace to add more. Sign in to a cloud backend to sync and, on Pro or self-hosted, create shared team workspaces with invites and roles.',
     },
     {
       title: 'Everything else',
-      body: 'Cmd/Ctrl + K opens the command palette. Settings holds AI providers, credits, and privacy controls. Click the sync pill to sign in and connect your account. Ready when you are.',
+      body: 'Cmd/Ctrl + K opens the command palette. Settings holds AI providers (bring your own key), workspace management, and data export. Click the sync pill to sign in. Ready when you are.',
     },
   ]
 

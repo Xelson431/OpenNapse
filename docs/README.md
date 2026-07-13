@@ -20,6 +20,8 @@ OpenNapse is an idea-to-project workspace built around one loop: **capture → p
 | [Architecture](./architecture.md) | The core seams and design rules. |
 | [AI & BYOK](./ai.md) | The provider registry, bring-your-own-key flow, and how keys stay out of the bundle. |
 | [Supabase Backend](./supabase.md) | Auth, RLS, migrations, and Edge Functions for the optional cloud path. |
+| [Feature & Plan Matrix](./feature-matrix.md) | What works for self-host, hosted Free, and hosted Pro — and how gating resolves. |
+| [MCP Server](./mcp.md) | Agent access: let AI read and improve your ideas, tasks, and resources. |
 | [Security](./security.md) | The security baseline and what must hold before cloud/AI ship. |
 | [External Providers](./external-providers.md) | Prerequisites before turning on cloud sync, self-hosting, or hosted AI. |
 
