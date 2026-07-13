@@ -8,6 +8,7 @@ import { requestMagicLink, signOutOfSupabase, useAuthStatus, type AuthStatus } f
 import { usePersonalWorkspaceBootstrap, type PersonalWorkspaceBootstrapStatus } from './auth/use-personal-workspace-bootstrap'
 import { logger, getLogs, clearLogs, serializeLogs, subscribeLogs, type LogEntry, type LogLevel } from './lib/logger'
 import { acceptInvite, inviteWorkspaceMember, listWorkspaceInvites, listWorkspaceMembers, revokeWorkspaceInvite, removeWorkspaceMember, type InviteRole, type WorkspaceInvite, type WorkspaceMember } from './auth/teams'
+import { createTeamWithWorkspace } from './auth/team-management'
 import { getTodayBalance, listRecentUsage, type DailyCreditBalance, type UsageEvent } from './auth/credits'
 import { createBillingPortalSession, createCheckoutSession, useSubscriptionStatus } from './auth/billing'
 import { useEntitlements } from './auth/entitlements'
@@ -856,6 +857,16 @@ function App() {
         <CreateWorkspaceModal
           allowTeamWorkspaces={teamWorkspacesEnabled && supabaseEnv.configured && authStatus.mode === 'signed-in'}
           onCreate={async (name, type) => {
+            if (type === 'team') {
+              // Team workspaces are created atomically server-side (team + owner
+              // membership + workspace + link) via a single RPC, then the local
+              // list is refreshed so the new shared workspace is selectable.
+              const result = await createTeamWithWorkspace(name, name)
+              if (!result.ok) throw new Error(result.error)
+              await loadWorkspaces({ adapter: activeAdapterRef.current, scope: activeScopeRef.current })
+              selectWorkspace(result.data.workspaceId)
+              return
+            }
             const record = await createWorkspaceRecord({ name, type })
             selectWorkspace(record.id)
           }}
