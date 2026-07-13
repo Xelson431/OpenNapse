@@ -1,6 +1,7 @@
 import { logger } from '../lib/logger'
 import type { DBAdapter, SyncOutboxEntry } from './adapter'
-import { createIdeaDraft, ideaSchema, type CreateIdeaInput, type DraftContext, type Idea } from '../domain/ideas'
+import { createIdeaDraft, ideaSchema, type CreateIdeaInput, type DraftContext, type Idea, type UpdateIdeaInput } from '../domain/ideas'
+import { createIdeaResourceDraft, ideaResourceSchema, type CreateIdeaResourceInput, type IdeaResource, type UpdateIdeaResourceInput } from '../domain/idea-resources'
 import { createNoteDraft, noteSchema, type Note, type UpsertNoteInput } from '../domain/notes'
 import { createProjectDraft, createProjectFromIdea, projectSchema, type CreateProjectInput, type Project, type PromoteIdeaInput } from '../domain/projects'
 import { createFirstStepTask, createTaskDraft, taskSchema, type CreateTaskInput, type Task, type TaskColumn, type UpdateTaskInput } from '../domain/tasks'
@@ -19,6 +20,7 @@ const IDEAS_KEY = 'OpenNapse:v0:ideas'
 const PROJECTS_KEY = 'OpenNapse:v0:projects'
 const TASKS_KEY = 'OpenNapse:v0:tasks'
 const NOTES_KEY = 'OpenNapse:v0:notes'
+const IDEA_RESOURCES_KEY = 'OpenNapse:v0:idea-resources'
 const OUTBOX_KEY = 'OpenNapse:v0:sync-outbox'
 const DEVICE_KEY = 'OpenNapse:v0:device-id'
 const LOCAL_USER_KEY = 'OpenNapse:v0:local-user-id'
@@ -137,6 +139,9 @@ export class BrowserLocalAdapter implements DBAdapter {
       this.backend.write(PROJECTS_KEY, byWorkspace(projects)),
       this.backend.write(TASKS_KEY, byWorkspace(tasks)),
       this.backend.write(NOTES_KEY, byWorkspace(notes)),
+      this.readCollection(IDEA_RESOURCES_KEY, ideaResourceSchema).then((resources) =>
+        this.backend.write(IDEA_RESOURCES_KEY, byWorkspace(resources)),
+      ),
     ])
     for (const r of cascadeResults) {
       if (r.status === 'rejected') logger.error('local', 'deleteWorkspace cascade write failed', { reason: r.reason })
@@ -177,6 +182,59 @@ export class BrowserLocalAdapter implements DBAdapter {
 
   async moveIdeaToProject(id: string, projectId: string): Promise<Idea> {
     return this.patchIdea(id, { projectId, lastTouchedAt: new Date().toISOString() })
+  }
+
+  async updateIdea(id: string, input: UpdateIdeaInput): Promise<Idea> {
+    const patch: Partial<Idea> = { lastTouchedAt: new Date().toISOString() }
+    if (input.title !== undefined) patch.title = input.title
+    if (input.body !== undefined) patch.body = input.body
+    if (input.description !== undefined) patch.description = input.description
+    if (input.tags !== undefined) patch.tags = input.tags
+    if (input.status !== undefined) patch.status = input.status
+    return this.patchIdea(id, patch)
+  }
+
+  async listIdeaResources(ideaId: string): Promise<IdeaResource[]> {
+    const resources = await this.readCollection(IDEA_RESOURCES_KEY, ideaResourceSchema)
+    return resources
+      .filter((resource) => !resource.isDeleted)
+      .filter((resource) => resource.workspaceId === this.activeWorkspaceId)
+      .filter((resource) => resource.ideaId === ideaId)
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+  }
+
+  async createIdeaResource(input: CreateIdeaResourceInput): Promise<IdeaResource> {
+    const resource = createIdeaResourceDraft(input, {
+      workspaceId: this.activeWorkspaceId,
+      createdBy: this.localUserId,
+    })
+    const all = await this.readCollection(IDEA_RESOURCES_KEY, ideaResourceSchema)
+    await this.backend.write(IDEA_RESOURCES_KEY, [resource, ...all])
+    return resource
+  }
+
+  async updateIdeaResource(id: string, input: UpdateIdeaResourceInput): Promise<IdeaResource> {
+    const resources = await this.readCollection(IDEA_RESOURCES_KEY, ideaResourceSchema)
+    const existing = resources.find((resource) => resource.id === id)
+    if (!existing) throw new Error('Idea resource not found')
+    const updated = ideaResourceSchema.parse({
+      ...existing,
+      ...(input.title !== undefined ? { title: input.title } : {}),
+      ...(input.content !== undefined ? { content: input.content } : {}),
+      ...(input.url !== undefined ? { url: input.url } : {}),
+      updatedAt: new Date().toISOString(),
+      version: existing.version + 1,
+    })
+    await this.backend.write(IDEA_RESOURCES_KEY, resources.map((resource) => (resource.id === id ? updated : resource)))
+    return updated
+  }
+
+  async deleteIdeaResource(id: string): Promise<void> {
+    const resources = await this.readCollection(IDEA_RESOURCES_KEY, ideaResourceSchema)
+    const existing = resources.find((resource) => resource.id === id)
+    if (!existing || existing.isDeleted) return
+    const deleted = ideaResourceSchema.parse({ ...existing, isDeleted: true, updatedAt: new Date().toISOString(), version: existing.version + 1 })
+    await this.backend.write(IDEA_RESOURCES_KEY, resources.map((resource) => (resource.id === id ? deleted : resource)))
   }
 
   async listProjects(): Promise<Project[]> {
@@ -356,6 +414,7 @@ export class BrowserLocalAdapter implements DBAdapter {
       this.backend.remove(PROJECTS_KEY),
       this.backend.remove(TASKS_KEY),
       this.backend.remove(NOTES_KEY),
+      this.backend.remove(IDEA_RESOURCES_KEY),
       this.backend.remove(OUTBOX_KEY),
     ])
     for (const r of clearResults) {

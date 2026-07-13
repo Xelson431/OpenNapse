@@ -10,6 +10,7 @@ export const ideaSchema = z.object({
   createdBy: z.string().min(1),
   title: z.string().trim().min(1).max(180),
   body: z.string().max(10_000).default(''),
+  description: z.string().max(50_000).default(''),
   status: ideaStatusSchema.default('raw'),
   projectId: z.string().uuid().nullable().default(null),
   tags: z.array(z.string().trim().min(1).max(32)).max(24).default([]),
@@ -34,6 +35,14 @@ export interface CreateIdeaInput {
   body?: string
   tags?: string[]
   projectId?: string | null
+}
+
+export interface UpdateIdeaInput {
+  title?: string
+  body?: string
+  description?: string
+  tags?: string[]
+  status?: z.infer<typeof ideaStatusSchema>
 }
 
 export interface DraftContext {

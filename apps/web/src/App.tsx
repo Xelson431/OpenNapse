@@ -19,7 +19,8 @@ import { getBillingEnv, getSupabaseEnv, type ResolvedSupabaseEnv } from './confi
 import { enhanceIdeaTitle, generateLocalAISuggestions } from './domain/ai'
 import { generateMentorReply, type MentorContext } from './domain/mentor'
 import type { FeatureDefinition } from './domain/features'
-import { getIdeaTemperature, type Idea } from './domain/ideas'
+import { getIdeaTemperature, type Idea, type UpdateIdeaInput } from './domain/ideas'
+import type { IdeaResource } from './domain/idea-resources'
 import { MAX_VOICE_RECORDING_DATA_URL_LENGTH, type Note, type VoiceRecording } from './domain/notes'
 import type { Project } from './domain/projects'
 import { calculateStats } from './domain/stats'
@@ -30,7 +31,7 @@ import { useSyncStatus, type CloudConnectionStatus } from './sync/use-sync'
 import { useIdeasStore } from './stores/use-ideas-store'
 import { toPromoteInput, useWorkspaceStore } from './stores/use-workspace-store'
 import { useWorkspacesStore } from './stores/use-workspaces-store'
-import { setDb } from './db/get-db'
+import { setDb, getDb } from './db/get-db'
 import { createSupabaseCloudAdapter } from './db/supabase-cloud-adapter'
 import { BrowserLocalAdapter } from './db/browser-local-adapter'
 import { buildCodeBlockHtml, prepareNoteContent, sanitizeNoteHref, sanitizeNoteHtml } from './lib/note-html'
@@ -143,6 +144,7 @@ function App() {
   const [isMentorOpen, setIsMentorOpen] = useState(() => !isMobileViewport())
   const [isStatusDockOpen, setIsStatusDockOpen] = useState(false)
   const [promotingIdea, setPromotingIdea] = useState<Idea | null>(null)
+  const [editingIdea, setEditingIdea] = useState<Idea | null>(null)
   const [creatingProject, setCreatingProject] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const deferredSearchQuery = useDeferredValue(searchQuery)
@@ -150,7 +152,7 @@ function App() {
   const [sessionKeys, setSessionKeys] = useState<Record<string, string>>({})
   const [acceptedPreviewHash, setAcceptedPreviewHash] = useState<string | undefined>()
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null)
-  const { ideas, isLoaded, loadIdeas, createIdea, buryIdea, resurrectIdea, moveIdeaToProject, clearAllData: clearIdeas } = useIdeasStore()
+  const { ideas, isLoaded, loadIdeas, createIdea, updateIdea, buryIdea, resurrectIdea, moveIdeaToProject, clearAllData: clearIdeas } = useIdeasStore()
   const { projects, tasks, notes, loadWorkspace, createProject, promoteIdea, createTask, moveTask, updateTask, upsertNote, deleteNote, exportData, importData, clearAllData: clearWorkspace } = useWorkspaceStore()
   const supabaseEnv = useMemo(() => getSupabaseEnv(), [])
   const authStatus = useAuthStatus()
@@ -595,6 +597,7 @@ function App() {
               onResurrect={resurrectIdea}
               onPromote={setPromotingIdea}
               onCapture={() => setIsCaptureOpen(true)}
+              onOpenIdea={setEditingIdea}
             />
           )}
           {activeView === 'dashboard' && (
@@ -699,6 +702,17 @@ function App() {
         />
       )}
 
+      {editingIdea && (
+        <IdeaDetailModal
+          idea={editingIdea}
+          onClose={() => setEditingIdea(null)}
+          onSave={async (input) => {
+            const updated = await updateIdea(editingIdea.id, input)
+            setEditingIdea(updated)
+          }}
+        />
+      )}
+
       {flowMode && (
         <div className="flow-indicator">
           <div className="flow-indicator-dot" />
@@ -772,7 +786,7 @@ function App() {
   )
 }
 
-function CaptureView({ ideas, buriedIdeas, isLoaded, onBury, onResurrect, onPromote, onCapture }: {
+function CaptureView({ ideas, buriedIdeas, isLoaded, onBury, onResurrect, onPromote, onCapture, onOpenIdea }: {
   ideas: Idea[]
   buriedIdeas: Idea[]
   isLoaded: boolean
@@ -780,6 +794,7 @@ function CaptureView({ ideas, buriedIdeas, isLoaded, onBury, onResurrect, onProm
   onResurrect: (id: string) => Promise<void>
   onPromote: (idea: Idea) => void
   onCapture: () => void
+  onOpenIdea: (idea: Idea) => void
 }) {
   const [filter, setFilter] = useState('all')
 
@@ -844,6 +859,7 @@ function CaptureView({ ideas, buriedIdeas, isLoaded, onBury, onResurrect, onProm
             <div key={idea.id} className={`idea-card idea-row ${temp}`} style={{ animationDelay: `${i * 50}ms` }}>
               <strong className="idea-card-title">{idea.title}</strong>
               {idea.body ? <div className="idea-card-body">{idea.body}</div> : null}
+              {idea.description ? <div className="idea-card-body" style={{ opacity: 0.7, fontSize: 12 }}>{idea.description.slice(0, 120)}{idea.description.length > 120 ? '…' : ''}</div> : null}
               <div className="idea-card-footer">
                 <div style={{display: 'flex', gap: 4}}>
                   {idea.tags.map(tag => (
@@ -855,6 +871,7 @@ function CaptureView({ ideas, buriedIdeas, isLoaded, onBury, onResurrect, onProm
                 </span>
               </div>
               <div className="idea-actions">
+                <button className="btn btn-ghost" style={{padding: '4px 8px', fontSize: 11}} onClick={(e) => {e.stopPropagation(); onOpenIdea(idea)}}>Details</button>
                 {idea.status !== 'project' ? <button className="btn btn-secondary" style={{padding: '4px 8px', fontSize: 11}} onClick={(e) => {e.stopPropagation(); onPromote(idea)}}>Promote</button> : null}
                 <button className="btn btn-ghost" style={{padding: '4px 8px', fontSize: 11}} onClick={(e) => {e.stopPropagation(); void onBury(idea.id)}}>Bury</button>
               </div>
@@ -3688,6 +3705,163 @@ function BillingSettingsPanel({ activeWorkspace, authStatus, workspaceBootstrap 
         />
       ) : null}
     </section>
+  )
+}
+
+function IdeaDetailModal({ idea, onClose, onSave }: {
+  idea: Idea
+  onClose: () => void
+  onSave: (input: UpdateIdeaInput) => Promise<void>
+}) {
+  const [title, setTitle] = useState(idea.title)
+  const [description, setDescription] = useState(idea.description)
+  const [tags, setTags] = useState(idea.tags.join(', '))
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState('')
+  const [tone, setTone] = useState<'info' | 'error' | 'success'>('info')
+
+  const [resources, setResources] = useState<IdeaResource[]>([])
+  const [resourcesLoaded, setResourcesLoaded] = useState(false)
+  const [newResourceTitle, setNewResourceTitle] = useState('')
+  const [newResourceContent, setNewResourceContent] = useState('')
+  const [resourceBusy, setResourceBusy] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      try {
+        const list = await getDb().listIdeaResources(idea.id)
+        if (active) setResources(list)
+      } catch (err) {
+        if (active) { setTone('error'); setMessage(err instanceof Error ? err.message : 'Failed to load resources.') }
+      } finally {
+        if (active) setResourcesLoaded(true)
+      }
+    })()
+    return () => { active = false }
+  }, [idea.id])
+
+  async function handleSave() {
+    setSaving(true)
+    setMessage('')
+    try {
+      const parsedTags = tags.split(',').map((tag) => tag.trim()).filter(Boolean).slice(0, 24)
+      await onSave({ title: title.trim() || idea.title, description, tags: parsedTags })
+      setTone('success')
+      setMessage('Saved.')
+    } catch (err) {
+      setTone('error')
+      setMessage(err instanceof Error ? err.message : 'Save failed.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function addResource() {
+    const trimmed = newResourceTitle.trim()
+    if (!trimmed) return
+    setResourceBusy(true)
+    try {
+      const created = await getDb().createIdeaResource({ ideaId: idea.id, title: trimmed, kind: 'markdown', content: newResourceContent })
+      setResources((current) => [...current, created])
+      setNewResourceTitle('')
+      setNewResourceContent('')
+    } catch (err) {
+      setTone('error')
+      setMessage(err instanceof Error ? err.message : 'Failed to add resource.')
+    } finally {
+      setResourceBusy(false)
+    }
+  }
+
+  async function saveResource(id: string, patch: { title?: string; content?: string }) {
+    try {
+      const updated = await getDb().updateIdeaResource(id, patch)
+      setResources((current) => current.map((resource) => (resource.id === id ? updated : resource)))
+    } catch (err) {
+      setTone('error')
+      setMessage(err instanceof Error ? err.message : 'Failed to save resource.')
+    }
+  }
+
+  async function removeResource(id: string) {
+    if (!confirm('Delete this resource?')) return
+    try {
+      await getDb().deleteIdeaResource(id)
+      setResources((current) => current.filter((resource) => resource.id !== id))
+    } catch (err) {
+      setTone('error')
+      setMessage(err instanceof Error ? err.message : 'Failed to delete resource.')
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="idea-detail-title" onClick={(event) => event.stopPropagation()}>
+        <div className="brain-dump-header">
+          <div>
+            <p className="eyebrow">Idea</p>
+            <h3 id="idea-detail-title">Edit idea</h3>
+          </div>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Close</button>
+        </div>
+
+        <div className="settings-panel">
+          <label className="settings-field">
+            <span>Title</span>
+            <input type="text" maxLength={180} value={title} onChange={(event) => setTitle(event.target.value)} disabled={saving} />
+          </label>
+          <label className="settings-field">
+            <span>Description (markdown)</span>
+            <textarea rows={6} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Add a longer description, context, or plan…" disabled={saving} style={{ resize: 'vertical', fontFamily: 'var(--font-mono, monospace)' }} />
+          </label>
+          <label className="settings-field">
+            <span>Tags (comma separated)</span>
+            <input type="text" value={tags} onChange={(event) => setTags(event.target.value)} placeholder="research, ai, growth" disabled={saving} />
+          </label>
+          <div className="settings-actions">
+            <button type="button" className="btn btn-primary" onClick={() => void handleSave()} disabled={saving}>{saving ? 'Saving…' : 'Save idea'}</button>
+          </div>
+        </div>
+
+        <div className="settings-panel">
+          <h4>Resources</h4>
+          <p className="settings-muted">Attach markdown docs or reference material to this idea. Agents can read and edit these through the MCP server.</p>
+          {!resourcesLoaded ? <small style={{ color: 'var(--muted)' }}>Loading…</small> : resources.length === 0 ? <small style={{ color: 'var(--muted)' }}>No resources yet.</small> : (
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {resources.map((resource) => (
+                <li key={resource.id} style={{ border: '1px solid var(--border, #e5e5e5)', borderRadius: 8, padding: 10 }}>
+                  <input
+                    type="text"
+                    defaultValue={resource.title}
+                    onBlur={(event) => { const v = event.target.value.trim(); if (v && v !== resource.title) void saveResource(resource.id, { title: v }) }}
+                    style={{ fontWeight: 600, width: '100%', marginBottom: 6 }}
+                  />
+                  <textarea
+                    rows={4}
+                    defaultValue={resource.content}
+                    onBlur={(event) => { if (event.target.value !== resource.content) void saveResource(resource.id, { content: event.target.value }) }}
+                    style={{ width: '100%', resize: 'vertical', fontFamily: 'var(--font-mono, monospace)', fontSize: 12 }}
+                  />
+                  <div className="settings-actions" style={{ marginTop: 6 }}>
+                    <button type="button" className="btn btn-ghost btn-compact" onClick={() => void removeResource(resource.id)}>Delete</button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div style={{ marginTop: 12, borderTop: '1px solid var(--border, #e5e5e5)', paddingTop: 12 }}>
+            <input type="text" placeholder="New resource title" value={newResourceTitle} onChange={(event) => setNewResourceTitle(event.target.value)} disabled={resourceBusy} style={{ width: '100%', marginBottom: 6 }} />
+            <textarea rows={3} placeholder="Markdown content (optional)" value={newResourceContent} onChange={(event) => setNewResourceContent(event.target.value)} disabled={resourceBusy} style={{ width: '100%', resize: 'vertical', fontFamily: 'var(--font-mono, monospace)', fontSize: 12 }} />
+            <div className="settings-actions" style={{ marginTop: 6 }}>
+              <button type="button" className="btn btn-secondary btn-compact" onClick={() => void addResource()} disabled={resourceBusy || newResourceTitle.trim().length === 0}>Add resource</button>
+            </div>
+          </div>
+        </div>
+
+        {message ? <p className={`settings-status settings-status--${tone}`}>{message}</p> : null}
+      </div>
+    </div>
   )
 }
 

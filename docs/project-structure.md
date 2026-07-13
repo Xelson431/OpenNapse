@@ -1,15 +1,16 @@
 # Project Structure
 
-OpenNapse is a pnpm monorepo. Today it contains a single app (`apps/web`) plus Supabase backend scaffolding and docs.
+OpenNapse is a pnpm monorepo. It contains the web app (`apps/web`), an optional MCP server (`apps/mcp`), plus Supabase backend scaffolding and docs.
 
 ## Top-level layout
 
 ```
 OpenNapse/
 ├── apps/
-│   └── web/              The React 19 + Vite + TypeScript app (the whole product)
+│   ├── web/              The React 19 + Vite + TypeScript app (the whole product)
+│   └── mcp/              Model Context Protocol server (stdio) for AI agent access
 ├── supabase/
-│   ├── migrations/       Postgres schema: workspaces, content tables, RLS, ops tables
+│   ├── migrations/       Postgres schema: workspaces, content tables, idea resources, RLS, ops tables
 │   └── functions/        Edge Functions: AI gateway, invites, workspace bootstrap
 ├── docker/               Self-host scaffolding (Dockerfile + nginx config)
 ├── docs/                 You are here

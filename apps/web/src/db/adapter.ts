@@ -1,4 +1,5 @@
-import type { CreateIdeaInput, Idea } from '../domain/ideas'
+import type { CreateIdeaInput, Idea, UpdateIdeaInput } from '../domain/ideas'
+import type { CreateIdeaResourceInput, IdeaResource, UpdateIdeaResourceInput } from '../domain/idea-resources'
 import type { Note, UpsertNoteInput } from '../domain/notes'
 import type { CreateProjectInput, PromoteIdeaInput, Project } from '../domain/projects'
 import type { CreateTaskInput, Task, TaskColumn, UpdateTaskInput } from '../domain/tasks'
@@ -24,9 +25,14 @@ export interface DBAdapter {
   deleteWorkspace(id: string): Promise<void>
   listIdeas(): Promise<Idea[]>
   createIdea(input: CreateIdeaInput): Promise<Idea>
+  updateIdea(id: string, input: UpdateIdeaInput): Promise<Idea>
   buryIdea(id: string): Promise<Idea>
   resurrectIdea(id: string): Promise<Idea>
   moveIdeaToProject(id: string, projectId: string): Promise<Idea>
+  listIdeaResources(ideaId: string): Promise<IdeaResource[]>
+  createIdeaResource(input: CreateIdeaResourceInput): Promise<IdeaResource>
+  updateIdeaResource(id: string, input: UpdateIdeaResourceInput): Promise<IdeaResource>
+  deleteIdeaResource(id: string): Promise<void>
   listProjects(): Promise<Project[]>
   createProject(input: CreateProjectInput): Promise<Project>
   listTasks(): Promise<Task[]>

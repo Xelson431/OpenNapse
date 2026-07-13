@@ -5,8 +5,8 @@ const now = '2026-05-09T00:00:00.000Z'
 
 const context: MentorContext = {
   ideas: [
-    { id: '11111111-1111-4111-8111-111111111111', workspaceId: 'local-personal-workspace', createdBy: 'u', title: 'Refine Mentor', body: '', status: 'project', projectId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', tags: ['ai'], color: '#78716C', energyLevel: null, mood: null, createdAt: now, updatedAt: now, lastTouchedAt: now, buriedAt: null, version: 1, clientId: 'c', deviceId: 'd', isDeleted: false },
-    { id: '22222222-2222-4222-8222-222222222222', workspaceId: 'local-personal-workspace', createdBy: 'u', title: 'Old backlog idea', body: '', status: 'raw', projectId: null, tags: [], color: '#78716C', energyLevel: null, mood: null, createdAt: now, updatedAt: now, lastTouchedAt: '2026-04-01T00:00:00.000Z', buriedAt: null, version: 1, clientId: 'c', deviceId: 'd', isDeleted: false },
+    { id: '11111111-1111-4111-8111-111111111111', workspaceId: 'local-personal-workspace', createdBy: 'u', title: 'Refine Mentor', body: '', description: '', status: 'project', projectId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', tags: ['ai'], color: '#78716C', energyLevel: null, mood: null, createdAt: now, updatedAt: now, lastTouchedAt: now, buriedAt: null, version: 1, clientId: 'c', deviceId: 'd', isDeleted: false },
+    { id: '22222222-2222-4222-8222-222222222222', workspaceId: 'local-personal-workspace', createdBy: 'u', title: 'Old backlog idea', body: '', description: '', status: 'raw', projectId: null, tags: [], color: '#78716C', energyLevel: null, mood: null, createdAt: now, updatedAt: now, lastTouchedAt: '2026-04-01T00:00:00.000Z', buriedAt: null, version: 1, clientId: 'c', deviceId: 'd', isDeleted: false },
   ],
   projects: [
     { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', workspaceId: 'local-personal-workspace', createdBy: 'u', title: 'Mentor Upgrade', description: '', sourceIdeaId: null, whyNow: 'Users need it', firstStep: 'Draft richer reply engine', doneLooksLike: 'Mentor responds with context', status: 'active', color: '#78716C', createdAt: now, updatedAt: now, version: 1, clientId: 'c', deviceId: 'd', isDeleted: false },
@@ -20,7 +20,7 @@ const context: MentorContext = {
   ],
   ideasByProject: {
     'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa': [
-      { id: '11111111-1111-4111-8111-111111111111', workspaceId: 'local-personal-workspace', createdBy: 'u', title: 'Refine Mentor', body: '', status: 'project', projectId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', tags: ['ai'], color: '#78716C', energyLevel: null, mood: null, createdAt: now, updatedAt: now, lastTouchedAt: now, buriedAt: null, version: 1, clientId: 'c', deviceId: 'd', isDeleted: false },
+      { id: '11111111-1111-4111-8111-111111111111', workspaceId: 'local-personal-workspace', createdBy: 'u', title: 'Refine Mentor', body: '', description: '', status: 'project', projectId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', tags: ['ai'], color: '#78716C', energyLevel: null, mood: null, createdAt: now, updatedAt: now, lastTouchedAt: now, buriedAt: null, version: 1, clientId: 'c', deviceId: 'd', isDeleted: false },
     ],
   },
 }

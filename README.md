@@ -52,6 +52,8 @@ OpenNapse is built around one loop: **capture → promote → plan → ship**.
 
 🕸️ **A map of your thinking** — every idea, project, note, and task is one connected graph you can actually see.
 
+🤝 **Agent-ready (MCP)** — an optional [Model Context Protocol](./docs/mcp.md) server lets AI agents read your ideas and tasks, see what's in progress, and improve idea descriptions or attach markdown resources — scoped to your account through Row Level Security.
+
 🎯 **Focus mode** — daily slots and a distraction-free surface for the one thing that matters today.
 
 🖥️ **Desktop & installable** — native builds for Windows, macOS, and Linux, plus an installable PWA with an offline app shell.
@@ -131,28 +133,40 @@ supabase functions deploy run-ai-action
 pnpm dev
 ```
 
-> **Status:** auth, workspace schema, RLS policies, and the AI gateway are wired up. Cross-device cloud **sync** is staged behind the adapter and not enabled yet — the app shows its current sync state in Settings so you always know where your data lives.
+> **Status:** auth, workspace schema, RLS policies, team invites/roles/ownership transfer, workspace lifecycle (delayed cancelable deletion), and the AI gateway are wired up and deployed. Cross-device cloud **sync** is staged behind the adapter and not enabled yet — the app shows its current sync state in Settings so you always know where your data lives.
+
+### Agent access (MCP)
+
+Once Supabase is configured and you're signed in, you can point AI agents at your workspace through the [MCP server](./docs/mcp.md):
+
+```bash
+pnpm --filter @opennapse/mcp build
+# Configure your agent to launch apps/mcp/dist/index.js with your
+# Supabase URL, anon key, and a user access token. See docs/mcp.md.
+```
 
 ## Architecture
 
 ```
 apps/web/          React 19 + Vite + TypeScript frontend
   src/
-    domain/        Zod-validated models (ideas, projects, tasks, notes, workspaces)
+    domain/        Zod-validated models (ideas, projects, tasks, notes, idea resources, workspaces)
     stores/        Zustand state management
     db/            DBAdapter interface → BrowserLocalAdapter (IndexedDB) or SupabaseCloudAdapter
     ai/            Provider registry (BYOK providers), action costs, consent gates
-    auth/          Supabase auth hooks, teams service, credits, audit
+    auth/          Supabase auth hooks, teams service, lifecycle, credits, audit
     components/    Extracted UI components
     lib/           Shared utilities
   electron/        Electron main + preload (compiles to dist-electron/)
   e2e/             Playwright end-to-end tests
 
+apps/mcp/          Model Context Protocol server (stdio) — agent access to ideas/tasks/resources
+
 supabase/
-  migrations/      Postgres schema (workspaces, content tables, RLS, ops tables)
+  migrations/      Postgres schema (workspaces, content tables, idea resources, RLS, ops tables)
   functions/       Edge Functions (AI gateway, invites, workspace bootstrap)
 
-docs/              Architecture, security, external providers notes
+docs/              Architecture, security, MCP, external providers notes
 docker/            Self-host scaffolding
 ```
 
@@ -177,6 +191,7 @@ docker/            Self-host scaffolding
 | `pnpm --filter @opennapse/web electron:dev` | Electron dev mode |
 | `pnpm --filter @opennapse/web electron:build` | Package desktop installer |
 | `pnpm --filter @opennapse/web exec playwright test` | E2E tests |
+| `pnpm --filter @opennapse/mcp build` | Build the MCP server (agent access) |
 
 ## Requirements
 

@@ -24,11 +24,12 @@ Idea ──promote──▶ Project ──────▶ Task
 
 | Entity | File | Key fields | Links |
 |--------|------|-----------|-------|
-| **Idea** | `ideas.ts` | `title` (≤180), `body` (≤10k), `status` (raw/active/project/done/buried), `tags`, `color`, `energyLevel` (1–5), `mood` | `projectId` → Project |
+| **Idea** | `ideas.ts` | `title` (≤180), `body` (≤10k), `description` (≤50k markdown), `status` (raw/active/project/done/buried), `tags`, `color`, `energyLevel` (1–5), `mood` | `projectId` → Project |
+| **Idea resource** | `idea-resources.ts` | `title`, `kind` (markdown/link), `content` (≤100k), `url`, `sortOrder` | `ideaId` → Idea (required) |
 | **Project** | `projects.ts` | `whyNow`, `firstStep`, `doneLooksLike`, `status` (planning/active/paused/shipped/abandoned) | `sourceIdeaId` → Idea |
 | **Task** | `tasks.ts` | `column` (backlog/todo/in_progress/review/done), `priority`, `sortOrder`, `scheduledDate`, `dueDate`, `completionPct`, `completedAt` | `projectId` → Project (required), `ideaId` → Idea (optional) |
 | **Note** | `notes.ts` | `content` (≤50k), `voiceRecordings` (≤10, each dataUrl ≤10MB), `tags` | `linkedIdeaId`, `linkedProjectId` |
-| **Workspace** | `workspaces.ts` | record + `workspaceModes` (personal live, team-preview disabled) | — |
+| **Workspace** | `workspaces.ts` | record + `workspaceModes` (personal live, team cloud-backed) | — |
 
 Every content record also carries `workspaceId` + `createdBy` (for scoping and, later, RLS), plus `version`, `clientId`/`deviceId`, and an `isDeleted` soft-delete flag.
 

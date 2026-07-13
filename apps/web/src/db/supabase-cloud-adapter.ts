@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getSupabaseBrowserClient } from '../lib/supabase'
-import { ideaSchema, createIdeaDraft, type CreateIdeaInput, type Idea, type DraftContext } from '../domain/ideas'
+import { ideaSchema, createIdeaDraft, type CreateIdeaInput, type Idea, type DraftContext, type UpdateIdeaInput } from '../domain/ideas'
+import { ideaResourceSchema, createIdeaResourceDraft, type CreateIdeaResourceInput, type IdeaResource, type UpdateIdeaResourceInput } from '../domain/idea-resources'
 import { noteSchema, createNoteDraft, type Note, type UpsertNoteInput } from '../domain/notes'
 import {
   projectSchema,
@@ -95,6 +96,7 @@ function rowToIdea(row: UnknownRow): Idea {
     createdBy: pickString(row, 'created_by'),
     title: pickString(row, 'title'),
     body: pickString(row, 'body', ''),
+    description: pickString(row, 'description', ''),
     status: pickString(row, 'status', 'raw'),
     projectId: pickNullable(row, 'project_id', (v) => (typeof v === 'string' ? v : null)),
     tags: Array.isArray(row.tags) ? (row.tags as string[]) : [],
@@ -120,6 +122,7 @@ function ideaToRow(idea: Idea): Record<string, unknown> {
     created_by: idea.createdBy,
     title: idea.title,
     body: idea.body,
+    description: idea.description,
     status: idea.status,
     project_id: idea.projectId,
     tags: idea.tags,
@@ -276,6 +279,42 @@ function noteToRow(note: Note): Record<string, unknown> {
     client_id: note.clientId,
     device_id: note.deviceId,
     is_deleted: note.isDeleted,
+  }
+}
+
+function rowToIdeaResource(row: UnknownRow): IdeaResource {
+  return ideaResourceSchema.parse({
+    id: pickString(row, 'id'),
+    workspaceId: pickString(row, 'workspace_id'),
+    ideaId: pickString(row, 'idea_id'),
+    createdBy: pickString(row, 'created_by'),
+    title: pickString(row, 'title'),
+    kind: pickString(row, 'kind', 'markdown'),
+    content: pickString(row, 'content', ''),
+    url: pickNullable(row, 'url', (v) => (typeof v === 'string' ? v : null)),
+    sortOrder: pickNumber(row, 'sort_order', 0),
+    version: pickNumber(row, 'version', 1),
+    isDeleted: pickBoolean(row, 'is_deleted', false),
+    createdAt: pickDate(row, 'created_at'),
+    updatedAt: pickDate(row, 'updated_at'),
+  })
+}
+
+function ideaResourceToRow(resource: IdeaResource): Record<string, unknown> {
+  return {
+    id: resource.id,
+    workspace_id: resource.workspaceId,
+    idea_id: resource.ideaId,
+    created_by: resource.createdBy,
+    title: resource.title,
+    kind: resource.kind,
+    content: resource.content,
+    url: resource.url,
+    sort_order: resource.sortOrder,
+    version: resource.version,
+    is_deleted: resource.isDeleted,
+    created_at: resource.createdAt,
+    updated_at: resource.updatedAt,
   }
 }
 
@@ -444,6 +483,80 @@ export class SupabaseCloudAdapter implements DBAdapter {
 
   async moveIdeaToProject(id: string, projectId: string): Promise<Idea> {
     return this.patchIdea(id, { project_id: projectId, last_touched_at: new Date().toISOString() })
+  }
+
+  async updateIdea(id: string, input: UpdateIdeaInput): Promise<Idea> {
+    const patch: Record<string, unknown> = { last_touched_at: new Date().toISOString() }
+    if (input.title !== undefined) patch.title = input.title
+    if (input.body !== undefined) patch.body = input.body
+    if (input.description !== undefined) patch.description = input.description
+    if (input.tags !== undefined) patch.tags = input.tags
+    if (input.status !== undefined) patch.status = input.status
+    return this.patchIdea(id, patch)
+  }
+
+  async listIdeaResources(ideaId: string): Promise<IdeaResource[]> {
+    const client = this.requireClient('listIdeaResources')
+    await this.requireUserId(client, 'listIdeaResources')
+    const { data, error } = await client
+      .from('idea_resources')
+      .select('*')
+      .eq('workspace_id', this.requireWorkspace())
+      .eq('idea_id', ideaId)
+      .eq('is_deleted', false)
+      .order('sort_order', { ascending: true })
+    if (error) {
+      logger.error('cloud', 'listIdeaResources failed', { error: error.message })
+      throw new Error(`listIdeaResources: ${error.message}`)
+    }
+    return (data ?? []).map((row) => rowToIdeaResource(row as UnknownRow))
+  }
+
+  async createIdeaResource(input: CreateIdeaResourceInput): Promise<IdeaResource> {
+    const client = this.requireClient('createIdeaResource')
+    const userId = await this.requireUserId(client, 'createIdeaResource')
+    const resource = createIdeaResourceDraft(input, { workspaceId: this.requireWorkspace(), createdBy: userId })
+    const { error } = await client.from('idea_resources').insert(ideaResourceToRow(resource))
+    if (error) {
+      logger.error('cloud', 'createIdeaResource failed', { error: error.message })
+      throw new Error(`createIdeaResource: ${error.message}`)
+    }
+    return resource
+  }
+
+  async updateIdeaResource(id: string, input: UpdateIdeaResourceInput): Promise<IdeaResource> {
+    const client = this.requireClient('updateIdeaResource')
+    await this.requireUserId(client, 'updateIdeaResource')
+    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() }
+    if (input.title !== undefined) patch.title = input.title
+    if (input.content !== undefined) patch.content = input.content
+    if (input.url !== undefined) patch.url = input.url
+    const { data, error } = await client
+      .from('idea_resources')
+      .update(patch)
+      .eq('id', id)
+      .eq('workspace_id', this.requireWorkspace())
+      .select('*')
+      .single()
+    if (error || !data) {
+      logger.error('cloud', 'updateIdeaResource failed', { error: error?.message, id })
+      throw new Error(`updateIdeaResource: ${error?.message ?? 'no row'}`)
+    }
+    return rowToIdeaResource(data as UnknownRow)
+  }
+
+  async deleteIdeaResource(id: string): Promise<void> {
+    const client = this.requireClient('deleteIdeaResource')
+    await this.requireUserId(client, 'deleteIdeaResource')
+    const { error } = await client
+      .from('idea_resources')
+      .update({ is_deleted: true, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .eq('workspace_id', this.requireWorkspace())
+    if (error) {
+      logger.error('cloud', 'deleteIdeaResource failed', { error: error.message, id })
+      throw new Error(`deleteIdeaResource: ${error.message}`)
+    }
   }
 
   private async patchIdea(id: string, patch: Record<string, unknown>): Promise<Idea> {
