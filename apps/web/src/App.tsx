@@ -2040,51 +2040,167 @@ function GraphView({ ideas, projects, tasks, notes, selectedProjectId }: { ideas
   )
 }
 
+type PomodoroMode = 'work' | 'short-break' | 'long-break'
+const POMODORO_STORAGE_KEY = 'OpenNapse:v0:pomodoro'
+const POMODORO_DURATIONS: Record<PomodoroMode, number> = { work: 25, 'short-break': 5, 'long-break': 15 }
+const POMODORO_LABELS: Record<PomodoroMode, string> = { work: 'Work sprint', 'short-break': 'Short break', 'long-break': 'Long break' }
+
+function playPomodoroChime() {
+  try {
+    const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!Ctor) return
+    const ctx = new Ctor()
+    const now = ctx.currentTime
+    ;[880, 1174.66, 1567.98].forEach((freq, i) => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.value = freq
+      const start = now + i * 0.16
+      gain.gain.setValueAtTime(0, start)
+      gain.gain.linearRampToValueAtTime(0.22, start + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.55)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start(start)
+      osc.stop(start + 0.6)
+    })
+    window.setTimeout(() => void ctx.close(), 1600)
+  } catch {
+    /* audio unavailable; silent */
+  }
+}
+
+function notifyPomodoro(title: string, body: string) {
+  try {
+    if (typeof Notification === 'undefined') return
+    if (Notification.permission === 'granted') new Notification(title, { body })
+  } catch {
+    /* ignore */
+  }
+}
+
+type PomodoroPersisted = { mode: PomodoroMode; durationMinutes: number; endsAt: number | null; remainingSeconds: number; isRunning: boolean; completedSessions: number }
+
+function readPomodoroState(): PomodoroPersisted | null {
+  try {
+    const raw = localStorage.getItem(POMODORO_STORAGE_KEY)
+    if (!raw) return null
+    return JSON.parse(raw) as PomodoroPersisted
+  } catch {
+    return null
+  }
+}
+
 function FocusView({ ideas, tasks, selectedProjectId, onMoveTask }: { ideas: Idea[]; tasks: Task[]; selectedProjectId?: string; onMoveTask: (id: string, columnId: TaskColumn) => Promise<void> }) {
   const projectTasks = selectedProjectId ? tasks.filter((task) => task.projectId === selectedProjectId) : tasks
   const openTasks = projectTasks.filter((task) => task.columnId !== 'done').slice(0, 8)
   const focusableIdeas = ideas.filter((idea) => idea.status !== 'done' && idea.status !== 'buried').slice(0, 8)
   const [linkedTarget, setLinkedTarget] = useState('')
-  const [mode, setMode] = useState<'work' | 'short-break'>('work')
-  const [durationMinutes, setDurationMinutes] = useState(25)
-  const [remainingSeconds, setRemainingSeconds] = useState(25 * 60)
-  const [isRunning, setIsRunning] = useState(false)
-  const [completedSessions, setCompletedSessions] = useState(0)
+
+  const restored = useRef<PomodoroPersisted | null>(readPomodoroState())
+  const [mode, setMode] = useState<PomodoroMode>(restored.current?.mode ?? 'work')
+  const [durationMinutes, setDurationMinutes] = useState(restored.current?.durationMinutes ?? 25)
+  const [endsAt, setEndsAt] = useState<number | null>(() => {
+    const r = restored.current
+    if (r?.isRunning && r.endsAt && r.endsAt > Date.now()) return r.endsAt
+    return null
+  })
+  const [remainingSeconds, setRemainingSeconds] = useState(() => {
+    const r = restored.current
+    if (r?.isRunning && r.endsAt) return Math.max(0, Math.round((r.endsAt - Date.now()) / 1000))
+    return r?.remainingSeconds ?? 25 * 60
+  })
+  const [isRunning, setIsRunning] = useState(() => {
+    const r = restored.current
+    return Boolean(r?.isRunning && r.endsAt && r.endsAt > Date.now())
+  })
+  const [completedSessions, setCompletedSessions] = useState(restored.current?.completedSessions ?? 0)
+  const [prompt, setPrompt] = useState<null | { next: PomodoroMode; message: string }>(null)
+
   const targetOptions = useMemo(() => [
     ...openTasks.map((task) => ({ id: `task:${task.id}`, kind: 'Task' as const, label: task.title })),
     ...focusableIdeas.map((idea) => ({ id: `idea:${idea.id}`, kind: 'Idea' as const, label: idea.title })),
   ], [focusableIdeas, openTasks])
   const activeTarget = targetOptions.find((option) => option.id === linkedTarget) ?? targetOptions[0]
 
+  // Persist so the timer survives view navigation and page reloads.
   useEffect(() => {
-    if (!isRunning) return
-    const timer = window.setInterval(() => {
-      setRemainingSeconds((current) => {
-        if (current <= 1) {
-          window.clearInterval(timer)
-          setIsRunning(false)
-          setCompletedSessions((count) => count + 1)
-          return 0
+    try {
+      localStorage.setItem(POMODORO_STORAGE_KEY, JSON.stringify({ mode, durationMinutes, endsAt, remainingSeconds, isRunning, completedSessions }))
+    } catch { /* ignore */ }
+  }, [mode, durationMinutes, endsAt, remainingSeconds, isRunning, completedSessions])
+
+  // Timestamp-based tick: recompute from wall-clock so background-tab
+  // throttling can't slow the countdown. Re-syncs on tab focus.
+  useEffect(() => {
+    if (!isRunning || endsAt === null) return
+    const tick = () => {
+      const remaining = Math.max(0, Math.round((endsAt - Date.now()) / 1000))
+      setRemainingSeconds(remaining)
+      if (remaining <= 0) {
+        setIsRunning(false)
+        setEndsAt(null)
+        playPomodoroChime()
+        if (mode === 'work') {
+          const nextCount = completedSessions + 1
+          setCompletedSessions(nextCount)
+          const longBreak = nextCount % 4 === 0
+          notifyPomodoro('Sprint complete', longBreak ? 'Great run of 4 — take a longer break.' : 'Nice work. Time for a short break.')
+          setPrompt({ next: longBreak ? 'long-break' : 'short-break', message: longBreak ? `${nextCount} sprints done. Take a 15-minute long break?` : 'Sprint complete. Start a 5-minute break?' })
+        } else {
+          notifyPomodoro('Break over', 'Ready for another focused sprint?')
+          setPrompt({ next: 'work', message: 'Break’s over. Start another 25-minute sprint?' })
         }
-        return current - 1
-      })
-    }, 1000)
-    return () => window.clearInterval(timer)
-  }, [isRunning])
+      }
+    }
+    tick()
+    const interval = window.setInterval(tick, 250)
+    const onVisible = () => { if (document.visibilityState === 'visible') tick() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { window.clearInterval(interval); document.removeEventListener('visibilitychange', onVisible) }
+  }, [isRunning, endsAt, mode, completedSessions])
 
   const totalSeconds = durationMinutes * 60
-  const elapsedPct = totalSeconds > 0 ? Math.round(((totalSeconds - remainingSeconds) / totalSeconds) * 100) : 0
+  const elapsedPct = totalSeconds > 0 ? Math.min(100, Math.round(((totalSeconds - remainingSeconds) / totalSeconds) * 100)) : 0
   const minutes = Math.floor(remainingSeconds / 60).toString().padStart(2, '0')
   const seconds = (remainingSeconds % 60).toString().padStart(2, '0')
   const activeTaskId = activeTarget?.id.startsWith('task:') ? activeTarget.id.slice(5) : null
   const activeTask = activeTaskId ? tasks.find((task) => task.id === activeTaskId) : null
 
-  const resetSprint = (nextMode: 'work' | 'short-break', minutesValue: number) => {
+  const configure = (nextMode: PomodoroMode, minutesValue: number) => {
     setMode(nextMode)
     setDurationMinutes(minutesValue)
     setRemainingSeconds(minutesValue * 60)
     setIsRunning(false)
+    setEndsAt(null)
+    setPrompt(null)
   }
+
+  const startPhase = (nextMode: PomodoroMode, minutesValue: number) => {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') void Notification.requestPermission()
+    setMode(nextMode)
+    setDurationMinutes(minutesValue)
+    setRemainingSeconds(minutesValue * 60)
+    setEndsAt(Date.now() + minutesValue * 60 * 1000)
+    setIsRunning(true)
+    setPrompt(null)
+  }
+
+  const toggle = () => {
+    if (isRunning) {
+      if (endsAt) setRemainingSeconds(Math.max(0, Math.round((endsAt - Date.now()) / 1000)))
+      setIsRunning(false)
+      setEndsAt(null)
+    } else {
+      startPhase(mode, Math.max(1, Math.ceil(remainingSeconds / 60)) === 0 ? durationMinutes : durationMinutes)
+      // resume from the exact remaining, not the full duration
+      setEndsAt(Date.now() + remainingSeconds * 1000)
+      setIsRunning(true)
+    }
+  }
+
+  const ringStyle = { ['--focus-progress']: `${elapsedPct}` } as CSSProperties
 
   return (
     <div className="view-enter" style={{paddingTop: 16}}>
@@ -2092,38 +2208,54 @@ function FocusView({ ideas, tasks, selectedProjectId, onMoveTask }: { ideas: Ide
         <div>
           <p className="eyebrow">Daily focus</p>
           <h2>Spend your cognitive budget deliberately.</h2>
-          <p>Focus Sprint links a timed work block to one Kanban task or idea, so the timer always belongs to real work.</p>
+          <p>A Pomodoro-style focus timer tied to real work: 25-minute sprints, short breaks between, a longer break every fourth. It keeps counting when you switch tabs and chimes when a phase ends.</p>
         </div>
       </div>
       <section className="focus-sprint-panel" aria-labelledby="focus-sprint-title">
         <div className="focus-sprint-copy">
           <p className="eyebrow">Focus Sprint</p>
           <h3 id="focus-sprint-title">A linked timer, not a floating stopwatch.</h3>
-          <p>Pomodone is a product/brand name. The generic method is Pomodoro-style timeboxing; here it becomes a Focus Sprint tied to an OpenNapse entity.</p>
+          <p>Pick what you’re working on so every sprint belongs to a real task or idea.</p>
           <label className="settings-field">
             <span>Link this sprint to</span>
-            <select value={linkedTarget} onChange={(event) => setLinkedTarget(event.target.value)} disabled={targetOptions.length === 0 || isRunning}>
+            <select value={linkedTarget} onChange={(event) => setLinkedTarget(event.target.value)} disabled={targetOptions.length === 0}>
               {targetOptions.length === 0 ? <option>No tasks or ideas available</option> : null}
               {targetOptions.map((option) => <option key={option.id} value={option.id}>{option.kind}: {option.label}</option>)}
             </select>
           </label>
           <div className="focus-sprint-modes" role="group" aria-label="Focus sprint mode">
-            <button type="button" className={mode === 'work' && durationMinutes === 25 ? 'active' : ''} onClick={() => resetSprint('work', 25)}>25 min work</button>
-            <button type="button" className={mode === 'work' && durationMinutes === 50 ? 'active' : ''} onClick={() => resetSprint('work', 50)}>50 min deep</button>
-            <button type="button" className={mode === 'short-break' ? 'active' : ''} onClick={() => resetSprint('short-break', 5)}>5 min break</button>
+            <button type="button" className={mode === 'work' && durationMinutes === 25 ? 'active' : ''} onClick={() => configure('work', 25)}>25 min work</button>
+            <button type="button" className={mode === 'work' && durationMinutes === 50 ? 'active' : ''} onClick={() => configure('work', 50)}>50 min deep</button>
+            <button type="button" className={mode === 'short-break' ? 'active' : ''} onClick={() => configure('short-break', 5)}>5 min break</button>
+            <button type="button" className={mode === 'long-break' ? 'active' : ''} onClick={() => configure('long-break', 15)}>15 min long</button>
           </div>
         </div>
-        <div className="focus-timer-card" style={{ ['--focus-progress']: `${elapsedPct}%` } as CSSProperties}>
-          <span className="focus-timer-mode">{mode === 'work' ? 'Work sprint' : 'Short break'}</span>
-          <strong className="focus-timer-time" aria-live="polite">{minutes}:{seconds}</strong>
-          <p>{activeTarget ? `${activeTarget.kind}: ${activeTarget.label}` : 'Pick a task or idea to start.'}</p>
-          <div className="focus-timer-progress" aria-hidden="true"><span /></div>
+        <div className={`focus-timer-card focus-timer-card--${mode}`} style={ringStyle}>
+          <div className="focus-timer-ring" aria-hidden="true">
+            <div className="focus-timer-ring-inner">
+              <span className="focus-timer-mode">{POMODORO_LABELS[mode]}</span>
+              <strong className="focus-timer-time" aria-live="polite">{minutes}:{seconds}</strong>
+              <span className="focus-timer-pct">{elapsedPct}%</span>
+            </div>
+          </div>
+          <p className="focus-timer-target">{activeTarget ? `${activeTarget.kind}: ${activeTarget.label}` : 'Pick a task or idea above.'}</p>
           <div className="focus-timer-actions">
-            <button type="button" className="btn btn-primary" disabled={!activeTarget} onClick={() => setIsRunning((running) => !running)}>{isRunning ? 'Pause' : 'Start'}</button>
-            <button type="button" className="btn btn-secondary" onClick={() => resetSprint(mode, durationMinutes)}>Reset</button>
+            <button type="button" className="btn btn-primary" onClick={toggle}>{isRunning ? 'Pause' : remainingSeconds < totalSeconds && remainingSeconds > 0 ? 'Resume' : 'Start'}</button>
+            <button type="button" className="btn btn-secondary" onClick={() => configure(mode, durationMinutes)} disabled={!isRunning && remainingSeconds === totalSeconds}>Reset</button>
             {activeTask ? <button type="button" className="btn btn-ghost" onClick={() => void onMoveTask(activeTask.id, 'done')}>Complete task</button> : null}
           </div>
-          <small>{completedSessions} sprint{completedSessions === 1 ? '' : 's'} completed this session</small>
+          {prompt ? (
+            <div className="focus-prompt" role="status">
+              <p>{prompt.message}</p>
+              <div className="focus-prompt-actions">
+                <button type="button" className="btn btn-primary btn-compact" onClick={() => startPhase(prompt.next, POMODORO_DURATIONS[prompt.next])}>
+                  {prompt.next === 'work' ? 'Start sprint' : 'Start break'}
+                </button>
+                <button type="button" className="btn btn-ghost btn-compact" onClick={() => { configure(prompt.next, POMODORO_DURATIONS[prompt.next]); setPrompt(null) }}>Not now</button>
+              </div>
+            </div>
+          ) : null}
+          <small>{completedSessions} sprint{completedSessions === 1 ? '' : 's'} completed today</small>
         </div>
       </section>
       <div className="focus-grid" aria-label="Daily focus slots">

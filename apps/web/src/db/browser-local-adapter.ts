@@ -305,6 +305,7 @@ export class BrowserLocalAdapter implements DBAdapter {
       sortOrder: Date.now(),
       completedAt: columnId === 'done' ? new Date().toISOString() : null,
       completionPct: columnId === 'done' ? 100 : existing.completionPct,
+      updatedBy: this.localUserId,
       updatedAt: new Date().toISOString(),
       version: existing.version + 1,
     })
@@ -320,6 +321,7 @@ export class BrowserLocalAdapter implements DBAdapter {
     const updated = taskSchema.parse({
       ...existing,
       ...input,
+      updatedBy: this.localUserId,
       updatedAt: new Date().toISOString(),
       version: existing.version + 1,
     })

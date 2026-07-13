@@ -10,6 +10,8 @@ export const taskSchema = z.object({
   logicalId: z.string().uuid().optional(),
   workspaceId: z.string().min(1),
   createdBy: z.string().min(1),
+  updatedBy: z.string().min(1).nullable().default(null),
+  assigneeId: z.string().min(1).nullable().default(null),
   title: z.string().trim().min(1).max(220),
   description: z.string().max(5_000).default(''),
   projectId: z.string().uuid(),
@@ -44,6 +46,7 @@ export interface CreateTaskInput {
 export interface UpdateTaskInput {
   scheduledDate?: string | null
   dueDate?: string | null
+  assigneeId?: string | null
 }
 
 export const taskColumns: Array<{ id: TaskColumn; label: string }> = [
@@ -62,6 +65,7 @@ export function createFirstStepTask(project: Project): Task {
     logicalId: id,
     workspaceId: project.workspaceId,
     createdBy: project.createdBy,
+    updatedBy: project.createdBy,
     title: project.firstStep,
     description: `First concrete step for ${project.title}`,
     projectId: project.id,
@@ -85,6 +89,7 @@ export function createTaskDraft(input: CreateTaskInput, context: DraftContext): 
     logicalId: id,
     workspaceId: context.workspaceId,
     createdBy: context.createdBy,
+    updatedBy: context.createdBy,
     title: input.title,
     description: input.description ?? '',
     projectId: input.projectId,
