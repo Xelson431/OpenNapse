@@ -36,10 +36,22 @@ The server reads credentials from environment variables:
 
 Provide **either** an access token or an email/password pair.
 
-## Run with npx
+## Build from source
 
-The server is published as [`opennapse-mcp`](https://www.npmjs.com/package/opennapse-mcp),
-so you don't need to clone or build anything:
+The package is set up to publish to npm as `opennapse-mcp`, but it is **not
+published yet**. Until it is, build it from the monorepo:
+
+```bash
+pnpm install
+pnpm --filter opennapse-mcp build
+```
+
+This produces `apps/mcp/dist/index.js`, an executable stdio server.
+
+## Run with npx (once published)
+
+Once `opennapse-mcp` is published to npm, you'll be able to run it without
+cloning or building:
 
 ```bash
 OPENNAPSE_SUPABASE_URL="https://YOUR_REF.supabase.co" \
@@ -48,29 +60,19 @@ OPENNAPSE_ACCESS_TOKEN="your-user-access-token" \
 npx opennapse-mcp
 ```
 
-## Build from source (optional)
-
-If you're working in the monorepo instead of using the published package:
-
-```bash
-pnpm install
-pnpm --filter opennapse-mcp build
-```
-
-This produces `apps/mcp/dist/index.js`, the same executable stdio server.
-
 ## Connecting an agent
 
 Most desktop AI tools (Claude Desktop, Cursor, Cline, opencode, etc.) accept an
-MCP server defined by a launch command. Example config using the published
-package:
+MCP server defined by a launch command.
+
+Using a local build (works today):
 
 ```json
 {
   "mcpServers": {
     "opennapse": {
-      "command": "npx",
-      "args": ["-y", "opennapse-mcp"],
+      "command": "node",
+      "args": ["/absolute/path/to/OpenNapse/apps/mcp/dist/index.js"],
       "env": {
         "OPENNAPSE_SUPABASE_URL": "https://YOUR_REF.supabase.co",
         "OPENNAPSE_SUPABASE_ANON_KEY": "your-anon-key",
@@ -81,8 +83,7 @@ package:
 }
 ```
 
-To run from a local build instead, use `"command": "node"` with
-`"args": ["/absolute/path/to/OpenNapse/apps/mcp/dist/index.js"]`.
+Once published, swap the command for `"npx"` with `"args": ["-y", "opennapse-mcp"]`.
 
 ## Tools
 

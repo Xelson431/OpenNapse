@@ -137,13 +137,12 @@ pnpm dev
 
 ### Agent access (MCP)
 
-Once Supabase is configured and you're signed in, you can point AI agents (Claude Desktop, Cursor, Cline, opencode, …) at your workspace through the published [MCP server](./docs/mcp.md) — no clone or build needed:
+Once Supabase is configured and you're signed in, you can point AI agents (Claude Desktop, Cursor, Cline, opencode, …) at your workspace through the [MCP server](./docs/mcp.md). Build it from the monorepo (it's set up to publish to npm as `opennapse-mcp`, but isn't published yet):
 
 ```bash
-OPENNAPSE_SUPABASE_URL="https://YOUR_REF.supabase.co" \
-OPENNAPSE_SUPABASE_ANON_KEY="your-anon-key" \
-OPENNAPSE_ACCESS_TOKEN="your-user-access-token" \
-npx opennapse-mcp
+pnpm --filter opennapse-mcp build
+# Point your agent at apps/mcp/dist/index.js with your Supabase URL,
+# anon key, and a user access token. See docs/mcp.md.
 ```
 
 Agents can then list ideas, see which tasks are in progress or done, and read or improve idea descriptions and resources — all scoped to your account through Row Level Security. See [docs/mcp.md](./docs/mcp.md).
