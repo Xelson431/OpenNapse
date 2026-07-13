@@ -86,7 +86,9 @@ create or replace function public.create_team_with_workspace(
 returns table (team_id uuid, workspace_id uuid, created boolean)
 language plpgsql
 security definer
-set search_path = public
+-- extensions on the path so pgcrypto's digest() resolves on Supabase and
+-- bare self-host Postgres alike.
+set search_path = public, extensions
 as $$
 #variable_conflict error
 declare
