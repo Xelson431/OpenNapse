@@ -1,19 +1,45 @@
 {
-  "name": "@opennapse/mcp",
+  "name": "opennapse-mcp",
   "version": "0.1.0",
-  "private": true,
+  "description": "Model Context Protocol server for OpenNapse — lets AI agents read and improve your ideas, tasks, and idea resources through your Supabase cloud workspace (RLS-scoped, per user).",
+  "keywords": [
+    "opennapse",
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "agents",
+    "supabase"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/Xelson431/OpenNapse/blob/main/docs/mcp.md",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Xelson431/OpenNapse.git",
+    "directory": "apps/mcp"
+  },
   "type": "module",
   "bin": {
-    "opennapse-mcp": "./dist/index.js"
+    "opennapse-mcp": "dist/index.js"
+  },
+  "exports": {
+    ".": "./dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "prepack": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.19.1",

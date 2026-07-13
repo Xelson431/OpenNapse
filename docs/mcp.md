@@ -1,6 +1,6 @@
 # OpenNapse MCP Server
 
-`@opennapse/mcp` (in `apps/mcp/`) is a [Model Context Protocol](https://modelcontextprotocol.io)
+`opennapse-mcp` (in `apps/mcp/`) is a [Model Context Protocol](https://modelcontextprotocol.io)
 server that lets AI agents read and improve your OpenNapse workspace: list
 ideas, see which tasks are in progress or done, read and rewrite idea
 descriptions, and manage per-idea markdown resources.
@@ -36,27 +36,41 @@ The server reads credentials from environment variables:
 
 Provide **either** an access token or an email/password pair.
 
-## Install & build
+## Run with npx
+
+The server is published as [`opennapse-mcp`](https://www.npmjs.com/package/opennapse-mcp),
+so you don't need to clone or build anything:
+
+```bash
+OPENNAPSE_SUPABASE_URL="https://YOUR_REF.supabase.co" \
+OPENNAPSE_SUPABASE_ANON_KEY="your-anon-key" \
+OPENNAPSE_ACCESS_TOKEN="your-user-access-token" \
+npx opennapse-mcp
+```
+
+## Build from source (optional)
+
+If you're working in the monorepo instead of using the published package:
 
 ```bash
 pnpm install
-pnpm --filter @opennapse/mcp build
+pnpm --filter opennapse-mcp build
 ```
 
-This produces `apps/mcp/dist/index.js`, an executable stdio server
-(`opennapse-mcp`).
+This produces `apps/mcp/dist/index.js`, the same executable stdio server.
 
 ## Connecting an agent
 
 Most desktop AI tools (Claude Desktop, Cursor, Cline, opencode, etc.) accept an
-MCP server defined by a launch command. Example config:
+MCP server defined by a launch command. Example config using the published
+package:
 
 ```json
 {
   "mcpServers": {
     "opennapse": {
-      "command": "node",
-      "args": ["/absolute/path/to/OpenNapse/apps/mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "opennapse-mcp"],
       "env": {
         "OPENNAPSE_SUPABASE_URL": "https://YOUR_REF.supabase.co",
         "OPENNAPSE_SUPABASE_ANON_KEY": "your-anon-key",
@@ -66,6 +80,9 @@ MCP server defined by a launch command. Example config:
   }
 }
 ```
+
+To run from a local build instead, use `"command": "node"` with
+`"args": ["/absolute/path/to/OpenNapse/apps/mcp/dist/index.js"]`.
 
 ## Tools
 
