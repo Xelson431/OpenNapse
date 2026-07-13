@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import { getDb } from '../db/get-db'
+import { assertDbSnapshotCurrent, captureDbSnapshot, getDb } from '../db/get-db'
+import type { DBAdapter } from '../db/adapter'
 import { assertWriteAllowed } from '../lib/rate-limiter'
 import type { Idea } from '../domain/ideas'
 import type { Note, UpsertNoteInput } from '../domain/notes'
@@ -11,7 +12,8 @@ interface WorkspaceState {
   tasks: Task[]
   notes: Note[]
   isLoaded: boolean
-  loadWorkspace: () => Promise<void>
+  loadWorkspace: (adapter?: DBAdapter, shouldCommit?: () => boolean) => Promise<void>
+  resetWorkspace: () => void
   createProject: (input: CreateProjectInput) => Promise<void>
   promoteIdea: (input: PromoteIdeaInput) => Promise<void>
   createTask: (input: CreateTaskInput) => Promise<void>
@@ -29,57 +31,83 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   tasks: [],
   notes: [],
   isLoaded: false,
-  loadWorkspace: async () => {
-    const [projects, tasks, notes] = await Promise.all([getDb().listProjects(), getDb().listTasks(), getDb().listNotes()])
+  loadWorkspace: async (adapter = getDb(), shouldCommit) => {
+    if (shouldCommit && !shouldCommit()) return
+    set({ projects: [], tasks: [], notes: [], isLoaded: false })
+    const [projects, tasks, notes] = await Promise.all([adapter.listProjects(), adapter.listTasks(), adapter.listNotes()])
+    if (shouldCommit && !shouldCommit()) return
     set({ projects, tasks, notes, isLoaded: true })
   },
+  resetWorkspace: () => set({ projects: [], tasks: [], notes: [], isLoaded: false }),
   createProject: async (input) => {
+    const snapshot = captureDbSnapshot()
     assertWriteAllowed('createProject')
-    const project = await getDb().createProject(input)
+    const project = await snapshot.adapter.createProject(input)
+    assertDbSnapshotCurrent(snapshot)
     set({ projects: [project, ...get().projects] })
   },
   promoteIdea: async (input) => {
+    const snapshot = captureDbSnapshot()
     assertWriteAllowed('promoteIdea')
-    const { project, task } = await getDb().promoteIdea(input)
+    const { project, task } = await snapshot.adapter.promoteIdea(input)
+    assertDbSnapshotCurrent(snapshot)
     set({ projects: [project, ...get().projects], tasks: [task, ...get().tasks] })
   },
   createTask: async (input) => {
+    const snapshot = captureDbSnapshot()
     assertWriteAllowed('createTask')
-    const task = await getDb().createTask(input)
+    const task = await snapshot.adapter.createTask(input)
+    assertDbSnapshotCurrent(snapshot)
     set({ tasks: [task, ...get().tasks] })
   },
   moveTask: async (id, columnId) => {
+    const snapshot = captureDbSnapshot()
     assertWriteAllowed('moveTask')
-    const updated = await getDb().moveTask(id, columnId)
+    const updated = await snapshot.adapter.moveTask(id, columnId)
+    assertDbSnapshotCurrent(snapshot)
     set({ tasks: get().tasks.map((task) => (task.id === id ? updated : task)) })
   },
   updateTask: async (id, input) => {
+    const snapshot = captureDbSnapshot()
     assertWriteAllowed('updateTask')
-    const updated = await getDb().updateTask(id, input)
+    const updated = await snapshot.adapter.updateTask(id, input)
+    assertDbSnapshotCurrent(snapshot)
     set({ tasks: get().tasks.map((task) => (task.id === id ? updated : task)) })
   },
   upsertNote: async (input) => {
+    const snapshot = captureDbSnapshot()
     assertWriteAllowed('upsertNote')
-    const note = await getDb().upsertNote(input)
+    const note = await snapshot.adapter.upsertNote(input)
+    assertDbSnapshotCurrent(snapshot)
     const notes = get().notes
     const exists = notes.some((item) => item.id === note.id)
     set({ notes: exists ? notes.map((item) => (item.id === note.id ? note : item)) : [note, ...notes] })
     return note.id
   },
   deleteNote: async (id) => {
+    const snapshot = captureDbSnapshot()
     assertWriteAllowed('deleteNote')
-    await getDb().deleteNote(id)
+    await snapshot.adapter.deleteNote(id)
+    assertDbSnapshotCurrent(snapshot)
     set({ notes: get().notes.filter((n) => n.id !== id) })
   },
-  exportData: async () => getDb().exportData(),
+  exportData: async () => {
+    const snapshot = captureDbSnapshot()
+    const data = await snapshot.adapter.exportData()
+    assertDbSnapshotCurrent(snapshot)
+    return data
+  },
   importData: async (payload) => {
+    const snapshot = captureDbSnapshot()
     assertWriteAllowed('importData')
-    await getDb().importData(payload)
-    await get().loadWorkspace()
+    await snapshot.adapter.importData(payload)
+    assertDbSnapshotCurrent(snapshot)
   },
   clearAllData: async () => {
+    const snapshot = captureDbSnapshot()
     assertWriteAllowed('clearAllData')
-    await getDb().clearAllData()
+    await snapshot.adapter.clearAllData()
+    assertDbSnapshotCurrent(snapshot)
     set({ projects: [], tasks: [], notes: [], isLoaded: true })
   },
 }))
