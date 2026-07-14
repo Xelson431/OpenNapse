@@ -43,12 +43,19 @@ export async function listTeams(): Promise<TeamResult<Team[]>> {
   }
 }
 
-export async function createTeam(name: string): Promise<TeamResult<{ teamId: string }>> {
+export async function createTeamWithWorkspace(
+  teamName: string,
+  workspaceName: string,
+): Promise<TeamResult<{ teamId: string; workspaceId: string }>> {
   try {
-    const { data, error } = await cloud().rpc('create_team', { requested_name: name.trim() })
-    const row = (data as Array<{ team_id: string }> | null)?.[0]
+    const { data, error } = await cloud().rpc('create_team_with_workspace', {
+      requested_team_name: teamName.trim(),
+      requested_workspace_name: workspaceName.trim(),
+      idempotency_key: crypto.randomUUID(),
+    })
+    const row = (data as Array<{ team_id: string; workspace_id: string }> | null)?.[0]
     if (error || !row) return { ok: false, error: error?.message ?? 'Team creation failed.' }
-    return { ok: true, data: { teamId: row.team_id } }
+    return { ok: true, data: { teamId: row.team_id, workspaceId: row.workspace_id } }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }
@@ -74,39 +81,9 @@ export async function listTeamMembers(teamId: string): Promise<TeamResult<TeamMe
   }
 }
 
-export async function addTeamMember(teamId: string, userId: string, role: Exclude<TeamRole, 'owner'>): Promise<TeamResult<true>> {
-  try {
-    const { error } = await cloud().rpc('add_team_member', { target_team_id: teamId, target_user_id: userId, member_role: role })
-    if (error) return { ok: false, error: error.message }
-    return { ok: true, data: true }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  }
-}
-
 export async function removeTeamMember(teamId: string, userId: string): Promise<TeamResult<true>> {
   try {
     const { error } = await cloud().rpc('remove_team_member', { target_team_id: teamId, target_user_id: userId })
-    if (error) return { ok: false, error: error.message }
-    return { ok: true, data: true }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  }
-}
-
-export async function attachTeamToWorkspace(teamId: string, workspaceId: string): Promise<TeamResult<true>> {
-  try {
-    const { error } = await cloud().rpc('attach_team_to_workspace', { target_team_id: teamId, target_workspace_id: workspaceId })
-    if (error) return { ok: false, error: error.message }
-    return { ok: true, data: true }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  }
-}
-
-export async function detachTeamFromWorkspace(teamId: string, workspaceId: string): Promise<TeamResult<true>> {
-  try {
-    const { error } = await cloud().rpc('detach_team_from_workspace', { target_team_id: teamId, target_workspace_id: workspaceId })
     if (error) return { ok: false, error: error.message }
     return { ok: true, data: true }
   } catch (error) {
