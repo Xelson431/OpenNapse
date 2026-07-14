@@ -227,6 +227,23 @@ describeRls('Supabase RLS integration', () => {
     expect(count).toBe(1)
   }, 60_000)
 
+  it('reuses the existing personal workspace without an ambiguous column error', async () => {
+    // Regression: the reuse branch of create_workspace referenced a bare
+    // workspace_id (in ON CONFLICT / INSERT) that collided with the RETURNS
+    // TABLE OUT column under #variable_conflict error, raising "column
+    // reference workspace_id is ambiguous" for every returning user at
+    // bootstrap. userA already has a personal workspace, so this call takes the
+    // reuse branch and must succeed, returning the same id with created=false.
+    const { data, error } = await userA!.client.rpc('create_workspace', {
+      requested_name: 'Personal',
+      requested_type: 'personal',
+      idempotency_key: crypto.randomUUID(),
+    })
+    expect(error).toBeNull()
+    expect(data![0].workspace_id).toBe(userA!.workspaceId)
+    expect(data![0].created).toBe(false)
+  }, 60_000)
+
   it('scopes workspace idempotency to caller and validated request payload', async () => {
     const key = crypto.randomUUID()
     const first = await userA!.client.rpc('create_workspace', {
