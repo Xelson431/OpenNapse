@@ -352,12 +352,13 @@ export class BrowserLocalAdapter implements DBAdapter {
   }
 
   async exportData(): Promise<string> {
-    const [workspaces, ideas, projects, tasks, notes] = await Promise.all([
+    const [workspaces, ideas, projects, tasks, notes, ideaResources] = await Promise.all([
       this.listWorkspaces(),
       this.readCollection(IDEAS_KEY, ideaSchema),
       this.readCollection(PROJECTS_KEY, projectSchema),
       this.readCollection(TASKS_KEY, taskSchema),
       this.readCollection(NOTES_KEY, noteSchema),
+      this.readCollection(IDEA_RESOURCES_KEY, ideaResourceSchema),
     ])
     const withLogicalId = <T extends { id: string; logicalId?: string }>(records: T[]) =>
       records.map((record) => ({ ...record, logicalId: record.logicalId ?? record.id }))
@@ -373,6 +374,7 @@ export class BrowserLocalAdapter implements DBAdapter {
         projects: withLogicalId(projects),
         tasks: withLogicalId(tasks),
         notes: withLogicalId(notes),
+        ideaResources,
       },
       null,
       2,
@@ -380,32 +382,39 @@ export class BrowserLocalAdapter implements DBAdapter {
   }
 
   async importData(payload: string): Promise<void> {
-    let parsed: { ideas?: unknown[]; projects?: unknown[]; tasks?: unknown[]; notes?: unknown[] }
+    let parsed: { ideas?: unknown[]; projects?: unknown[]; tasks?: unknown[]; notes?: unknown[]; ideaResources?: unknown[] }
     try {
       parsed = JSON.parse(payload)
     } catch (e) {
       logger.error('local', 'importData JSON parse failed', { error: String(e) })
       throw new Error('importData: invalid JSON', { cause: e })
     }
-    let ideas: Idea[], projects: Project[], tasks: Task[], notes: Note[]
+    let ideas: Idea[], projects: Project[], tasks: Task[], notes: Note[], ideaResources: IdeaResource[]
     try {
       ideas = (parsed.ideas ?? []).map((idea) => ideaSchema.parse(idea))
       projects = (parsed.projects ?? []).map((project) => projectSchema.parse(project))
       tasks = (parsed.tasks ?? []).map((task) => taskSchema.parse(task))
       notes = (parsed.notes ?? []).map((note) => noteSchema.parse(note))
+      ideaResources = (parsed.ideaResources ?? []).map((resource) => ideaResourceSchema.parse(resource))
     } catch (e) {
       logger.error('local', 'importData schema validation failed', { error: String(e) })
       throw new Error('importData: schema validation failed', { cause: e })
     }
 
+    // Fail loudly on any persistence error instead of reporting success on a
+    // partial write. A silent partial import corrupts a backup restore.
     const importResults = await Promise.allSettled([
       this.backend.write(IDEAS_KEY, ideas),
       this.backend.write(PROJECTS_KEY, projects),
       this.backend.write(TASKS_KEY, tasks),
       this.backend.write(NOTES_KEY, notes),
+      this.backend.write(IDEA_RESOURCES_KEY, ideaResources),
     ])
-    for (const r of importResults) {
-      if (r.status === 'rejected') logger.error('local', 'importData write failed', { reason: r.reason })
+    const failures = importResults.filter((result) => result.status === 'rejected')
+    if (failures.length > 0) {
+      const reasons = failures.map((result) => String((result as PromiseRejectedResult).reason)).join('; ')
+      logger.error('local', 'importData write failed', { error: reasons })
+      throw new Error(`importData: write failed (${reasons})`)
     }
     await this.enqueue('backup', crypto.randomUUID(), 'insert', { importedAt: new Date().toISOString() })
   }

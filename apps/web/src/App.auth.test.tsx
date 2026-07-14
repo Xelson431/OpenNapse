@@ -5,6 +5,24 @@ import App from './App'
 import type { AuthStatus } from './auth/use-auth-status'
 import type { PersonalWorkspaceBootstrapStatus } from './auth/use-personal-workspace-bootstrap'
 import type { ResolvedSupabaseEnv, ResolvedBillingEnv } from './config/env'
+import { getDb } from './db/get-db'
+import { useWorkspacesStore } from './stores/use-workspaces-store'
+
+const cloudMock = vi.hoisted(() => ({
+  adapter: {
+    setActiveWorkspaceId: vi.fn(),
+    listWorkspaces: vi.fn(),
+    listIdeas: vi.fn(),
+    listProjects: vi.fn(),
+    listTasks: vi.fn(),
+    listNotes: vi.fn(),
+  },
+  create: vi.fn(),
+}))
+
+vi.mock('./db/supabase-cloud-adapter', () => ({
+  createSupabaseCloudAdapter: cloudMock.create,
+}))
 
 // Module-level state for mocks — one value per describe block
 let mockAuthStatus: AuthStatus = {
@@ -99,9 +117,9 @@ const unavailableStatus: AuthStatus = {
 }
 
 const readyBootstrap: PersonalWorkspaceBootstrapStatus = {
-  mode: 'idle',
-  label: 'Bootstrap waiting',
-  description: 'No Supabase auth session. Workspace bootstrap is not possible until sign-in.',
+  mode: 'ready',
+  label: 'Workspace ready',
+  description: 'Personal workspace is ready.',
   workspaceId: 'test-workspace-id',
 }
 
@@ -114,6 +132,13 @@ const waitingBootstrap: PersonalWorkspaceBootstrapStatus = {
 beforeEach(() => {
   localStorage.clear()
   mockSyncDescription = 'Sync status.'
+  cloudMock.create.mockReset().mockReturnValue(cloudMock.adapter)
+  cloudMock.adapter.setActiveWorkspaceId.mockReset()
+  cloudMock.adapter.listWorkspaces.mockResolvedValue([{ id: 'test-workspace-id', name: 'Personal', type: 'personal', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }])
+  cloudMock.adapter.listIdeas.mockResolvedValue([])
+  cloudMock.adapter.listProjects.mockResolvedValue([])
+  cloudMock.adapter.listTasks.mockResolvedValue([])
+  cloudMock.adapter.listNotes.mockResolvedValue([])
 })
 
 describe('Signed-in auth flows', () => {
@@ -147,6 +172,18 @@ describe('Signed-in auth flows', () => {
     render(<App />)
     expect(screen.getByTitle(/user@example\.com/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /sign in/i })).not.toBeInTheDocument()
+  })
+
+  it('restores the persisted cloud workspace selection', async () => {
+    localStorage.setItem('OpenNapse:v0:active-workspace-id:cloud:test.supabase.co:test-user-id', 'shared-workspace')
+    cloudMock.adapter.listWorkspaces.mockResolvedValue([
+      { id: 'test-workspace-id', name: 'Personal', type: 'personal', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
+      { id: 'shared-workspace', name: 'Shared', type: 'personal', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
+    ])
+    render(<App />)
+
+    await waitFor(() => expect(cloudMock.adapter.setActiveWorkspaceId).toHaveBeenCalledWith('shared-workspace'))
+    expect(screen.getByLabelText(/select workspace/i)).toHaveValue('shared-workspace')
   })
 
   it('shows billing tab when billing URL is configured', async () => {
@@ -186,6 +223,24 @@ describe('Signed-in auth flows', () => {
 
     expect(screen.getAllByText('Sync failed').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Cloud migration failed.')).toBeInTheDocument()
+  })
+
+  it('reopens the previous adapter after bootstrap fails', async () => {
+    mockBootstrap = {
+      mode: 'failed',
+      label: 'Bootstrap failed',
+      description: 'Workspace setup failed.',
+    }
+    render(<App />)
+
+    await waitFor(() => expect(() => getDb()).not.toThrow())
+  })
+
+  it('reopens the previous adapter after cloud setup throws', async () => {
+    cloudMock.create.mockImplementationOnce(() => { throw new Error('Cloud setup failed.') })
+    render(<App />)
+
+    await waitFor(() => expect(() => getDb()).not.toThrow())
   })
 
   it('shows credit usage panel when signed in with configured Supabase', async () => {
@@ -383,5 +438,46 @@ describe('Auth state transitions', () => {
 
     expect(screen.getByRole('button', { name: /dump idea/i })).toBeEnabled()
     expect(screen.getAllByRole('button', { name: /^notes$/i }).length).toBeGreaterThan(0)
+  })
+
+  it('does not construct a cloud adapter while auth is loading', async () => {
+    mockAuthStatus = { mode: 'loading', label: 'Checking', description: 'Resolving session.' }
+    mockBootstrap = waitingBootstrap
+    render(<App />)
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(cloudMock.create).not.toHaveBeenCalled()
+  })
+
+  it('suppresses a stale cloud transition after sign-out', async () => {
+    let resolveWorkspaces!: (workspaces: unknown[]) => void
+    cloudMock.adapter.listWorkspaces.mockImplementationOnce(() => new Promise((resolve) => { resolveWorkspaces = resolve }))
+    const view = render(<App />)
+
+    mockAuthStatus = signedOutStatus
+    mockBootstrap = waitingBootstrap
+    view.rerender(<App />)
+    resolveWorkspaces([{ id: 'test-workspace-id', name: 'Personal', type: 'personal', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }])
+
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(cloudMock.adapter.setActiveWorkspaceId).not.toHaveBeenCalled()
+  })
+
+  it('does not commit an in-flight cloud transition after unmount', async () => {
+    let resolveWorkspaces!: (workspaces: unknown[]) => void
+    const previousAdapter = getDb()
+    const previousState = useWorkspacesStore.getState()
+    cloudMock.adapter.listWorkspaces.mockImplementationOnce(() => new Promise((resolve) => { resolveWorkspaces = resolve }))
+    const view = render(<App />)
+
+    view.unmount()
+    resolveWorkspaces([{ id: 'test-workspace-id', name: 'Personal', type: 'personal', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }])
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(getDb()).toBe(previousAdapter)
+    expect(useWorkspacesStore.getState().workspaces).toEqual(previousState.workspaces)
+    expect(useWorkspacesStore.getState().activeWorkspaceId).toBe(previousState.activeWorkspaceId)
   })
 })
