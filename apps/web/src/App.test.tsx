@@ -435,7 +435,7 @@ describe('App shell', () => {
     expect(screen.getByRole('heading', { name: /Credits and usage/i })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /^advanced$/i }))
-    expect(screen.getByRole('heading', { name: /Team settings/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /Audit log/i })).toBeInTheDocument()
   })
 
   it('moves Kanban cards with keyboard controls', async () => {
