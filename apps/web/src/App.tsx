@@ -3283,7 +3283,7 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
   const billingEnv = useMemo(() => getBillingEnv(), [])
   const isHosted = billingEnv.configured
   const teamWorkspacesAvailable = teamWorkspacesEnabled && supabaseEnv.configured && authStatus.mode === 'signed-in'
-  const [settingsTab, setSettingsTab] = useState<'account' | 'ai' | 'data' | 'billing' | 'advanced'>('account')
+  const [settingsTab, setSettingsTab] = useState<'account' | 'ai' | 'data' | 'team' | 'billing' | 'advanced'>('account')
   const statusToShow = statusMessage
   const canRequestMagicLink = supabaseEnv.configured && authStatus.mode !== 'loading' && authStatus.mode !== 'signed-in' && authEmail.trim().length > 0
 
@@ -3415,6 +3415,9 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
           <button type="button" className={settingsTab === 'account' ? 'active' : ''} onClick={() => setSettingsTab('account')}>Account</button>
           <button type="button" className={settingsTab === 'ai' ? 'active' : ''} onClick={() => setSettingsTab('ai')}>AI</button>
           <button type="button" className={settingsTab === 'data' ? 'active' : ''} onClick={() => setSettingsTab('data')}>Data</button>
+          {teamWorkspacesEnabled && (
+            <button type="button" className={settingsTab === 'team' ? 'active' : ''} onClick={() => setSettingsTab('team')}>Team</button>
+          )}
           {isHosted ? (
             <button type="button" className={settingsTab === 'billing' ? 'active' : ''} onClick={() => setSettingsTab('billing')}>Billing</button>
           ) : (
@@ -3728,6 +3731,17 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
             </div>
           )}
 
+          {settingsTab === 'team' && teamWorkspacesEnabled && (
+            <div className="settings-grid">
+              <TeamSettingsPanel
+                activeWorkspace={activeWorkspace}
+                supabaseEnv={supabaseEnv}
+                authStatus={authStatus}
+                teamFeaturesEnabled={teamWorkspacesEnabled}
+              />
+            </div>
+          )}
+
           {settingsTab === 'billing' && isHosted && (
             <div className="settings-grid">
               <BillingSettingsPanel activeWorkspace={activeWorkspace} authStatus={authStatus} workspaceBootstrap={workspaceBootstrap} />
@@ -3740,12 +3754,6 @@ function SettingsModal({ theme, onThemeChange, activeWorkspace, workspaceMode, o
                 activeWorkspace={activeWorkspace}
                 supabaseEnv={supabaseEnv}
                 authStatus={authStatus}
-              />
-              <TeamSettingsPanel
-                activeWorkspace={activeWorkspace}
-                supabaseEnv={supabaseEnv}
-                authStatus={authStatus}
-                teamFeaturesEnabled={teamWorkspacesEnabled}
               />
             </div>
           )}
