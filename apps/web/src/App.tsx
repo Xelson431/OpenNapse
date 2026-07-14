@@ -4292,6 +4292,8 @@ function TeamSettingsPanel({ activeWorkspace, supabaseEnv, authStatus, teamFeatu
   const [nowMs] = useState(() => Date.now())
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<InviteRole>('member')
+  const [inviteLink, setInviteLink] = useState('')
+  const [copied, setCopied] = useState(false)
   const [status, setStatus] = useState('')
   const [statusTone, setStatusTone] = useState<'info' | 'success' | 'error'>('info')
   const [isBusy, setIsBusy] = useState(false)
@@ -4327,7 +4329,12 @@ function TeamSettingsPanel({ activeWorkspace, supabaseEnv, authStatus, teamFeatu
     setIsBusy(false)
     if (result.ok) {
       setStatusTone('success')
-      setStatus(`Invite sent to ${trimmed}. Share link token: ${result.data.token.slice(0, 6)}…`)
+      const url = new URL(window.location.href)
+      url.searchParams.set('invite', result.data.token)
+      const link = url.toString()
+      setInviteLink(link)
+      setCopied(false)
+      setStatus(`Invite created for ${trimmed}. Copy the link below and send it to them.`)
       setInviteEmail('')
       const refreshed = await listWorkspaceInvites(activeWorkspace.id)
       if (refreshed.ok) setInvites(refreshed.data)
@@ -4416,6 +4423,31 @@ function TeamSettingsPanel({ activeWorkspace, supabaseEnv, authStatus, teamFeatu
               <button type="submit" className="btn btn-primary" disabled={isBusy || inviteEmail.trim().length === 0}>Send invite</button>
             </div>
           </form>
+          {inviteLink ? (
+            <div className="settings-row settings-row--stack">
+              <span>Share link</span>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <input
+                  type="text"
+                  readOnly
+                  value={inviteLink}
+                  onFocus={(event) => event.currentTarget.select()}
+                  style={{ flex: '1 1 260px', minWidth: 200, fontSize: 12 }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-compact"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(inviteLink).then(() => {
+                      setCopied(true)
+                      window.setTimeout(() => setCopied(false), 2000)
+                    })
+                  }}
+                >{copied ? 'Copied' : 'Copy link'}</button>
+              </div>
+              <small style={{ color: 'var(--muted)' }}>Send this link to the invitee. They must open it while signed in with the invited email.</small>
+            </div>
+          ) : null}
           <div className="settings-row settings-row--stack">
             <span>Invites</span>
             {invites.length === 0 ? <small style={{ color: 'var(--muted)' }}>No invites yet.</small> : (
