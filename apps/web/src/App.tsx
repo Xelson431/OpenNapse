@@ -4413,9 +4413,10 @@ function TeamSettingsPanel({ activeWorkspace, supabaseEnv, authStatus, teamFeatu
                 value={inviteEmail}
                 onChange={(event) => setInviteEmail(event.target.value)}
                 disabled={isBusy}
+                aria-label="Invite email"
                 style={{ flex: '1 1 220px', minWidth: 180 }}
               />
-              <select value={inviteRole} onChange={(event) => setInviteRole(event.target.value as InviteRole)} disabled={isBusy}>
+              <select value={inviteRole} onChange={(event) => setInviteRole(event.target.value as InviteRole)} disabled={isBusy} aria-label="Invite role">
                 <option value="member">Member</option>
                 <option value="admin">Admin</option>
                 <option value="viewer">Viewer</option>
@@ -4432,16 +4433,26 @@ function TeamSettingsPanel({ activeWorkspace, supabaseEnv, authStatus, teamFeatu
                   readOnly
                   value={inviteLink}
                   onFocus={(event) => event.currentTarget.select()}
+                  aria-label="Invite link"
                   style={{ flex: '1 1 260px', minWidth: 200, fontSize: 12 }}
                 />
                 <button
                   type="button"
                   className="btn btn-ghost btn-compact"
                   onClick={() => {
-                    void navigator.clipboard.writeText(inviteLink).then(() => {
+                    const done = () => {
                       setCopied(true)
                       window.setTimeout(() => setCopied(false), 2000)
-                    })
+                    }
+                    if (navigator.clipboard?.writeText) {
+                      navigator.clipboard.writeText(inviteLink).then(done).catch(() => {
+                        setStatusTone('error')
+                        setStatus('Copy failed — select the link and copy it manually.')
+                      })
+                    } else {
+                      setStatusTone('error')
+                      setStatus('Copy not available — select the link and copy it manually.')
+                    }
                   }}
                 >{copied ? 'Copied' : 'Copy link'}</button>
               </div>
@@ -4491,7 +4502,7 @@ function TeamSettingsPanel({ activeWorkspace, supabaseEnv, authStatus, teamFeatu
               </ul>
             )}
           </div>
-          {status ? <p className={`settings-status settings-status--${statusTone}`}>{status}</p> : null}
+          {status ? <p className={`settings-status settings-status--${statusTone}`} role="status">{status}</p> : null}
         </>
       )}
     </section>
