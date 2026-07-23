@@ -163,3 +163,6 @@ yarn.lock
 
 # Local debug log exports
 opennapse-logs*.json
+
+# OS junk
+.DS_Store
